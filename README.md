@@ -1,0 +1,3 @@
+# Seneca Hack
+
+Hackathon project.
