@@ -214,16 +214,25 @@ class SimulationEngine:
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     engine = SimulationEngine()
-    
+
     # Run a test simulation in deep Canadian Winter
-    sim_results = engine.run_simulation(num_evs=15000, time_of_day="Morning", temperature_celsius=-15.0)
-    
+    sim_results = engine.run_simulation(num_evs=15000, time_of_day="Evening", temperature_celsius=-15.0)
+
     print("\n========================================================")
-    print("GRANULAR SIMULATION RESULTS: 15,000 EVs (Morning Commute @ -15°C)")
+    print("GRANULAR SIMULATION: 15,000 EVs (Evening Commute @ -15C)")
     print("========================================================")
-    
-    # Print a beautiful sample of the granular dataset
-    print(sim_results.head(15).to_string(index=False))
-    
-    print("\n[OK] Engine successfully generated 15,000 individual agents.")
+    print(sim_results.head(10).to_string(index=False))
+
+    # Aggregate into grid load results
+    grid_results = engine.aggregate_grid_load(sim_results)
+
+    print("\n========================================================")
+    print("GRID LOAD RESULTS (Per-FSA)")
+    print("========================================================")
+    print(grid_results.head(15).to_string(index=False))
+
+    overloaded_count = grid_results["overloaded"].sum()
+    total_fsas = len(grid_results)
+    print(f"\n[RESULT] {overloaded_count}/{total_fsas} FSAs overloaded.")
+    print(f"[RESULT] Max deficit: {grid_results['deficit_kw'].max():.0f} kW")
     print("========================================================")
