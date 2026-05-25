@@ -1,0 +1,16 @@
+[project]
+name = "seneca-hack"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "folium>=0.20.0",
+    "geopandas>=1.1.3",
+    "numpy>=2.4.6",
+    "pandas>=3.0.3",
+    "pulp>=3.3.2",
+    "requests>=2.34.2",
+    "shapely>=2.1.2",
+    "streamlit>=1.57.0",
+    "streamlit-folium>=0.27.2",
+]
