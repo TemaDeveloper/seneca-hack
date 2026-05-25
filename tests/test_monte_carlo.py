@@ -1,6 +1,7 @@
 import pytest
 import os
 import sys
+import pandas as pd
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
@@ -60,6 +61,5 @@ def test_aggregate_grid_load_overloaded_flag_consistent():
     ev_df = engine.run_simulation(num_evs=1000, time_of_day="Evening")
     grid_df = engine.aggregate_grid_load(ev_df)
 
-    for _, row in grid_df.iterrows():
-        expected = row["total_load_kw"] > row["proxy_capacity_kw"]
-        assert row["overloaded"] == expected, f"FSA {row['fsa']}: total={row['total_load_kw']}, cap={row['proxy_capacity_kw']}, overloaded={row['overloaded']}"
+    expected = grid_df["total_load_kw"] > grid_df["proxy_capacity_kw"]
+    pd.testing.assert_series_equal(grid_df["overloaded"].reset_index(drop=True), expected.reset_index(drop=True), check_names=False)

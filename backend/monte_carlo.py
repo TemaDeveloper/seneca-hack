@@ -156,8 +156,9 @@ class SimulationEngine:
             2. Extract arrival hour as integer
             3. GroupBy (FSA, hour) to compute concurrent load
             4. Find peak hour per FSA
-            5. Add IESO baseline load
-            6. Run grid inequality test
+            5. Merge with base GeoDataFrame for capacity and coordinates
+            6. Add IESO baseline load at peak hour
+            7. Run grid inequality test
 
         Returns:
             DataFrame with columns: fsa, zone_type, proxy_capacity_kw,
@@ -189,10 +190,11 @@ class SimulationEngine:
 
         # 6. Add IESO baseline load at peak hour
         ieso_lookup = self.ieso_profile.set_index("hour")["load_fraction"]
-        result["baseline_load_kw"] = result.apply(
-            lambda r: ieso_lookup.get(int(r["peak_hour"]), 0.85) * r["proxy_capacity_kw"],
-            axis=1
-        ).round(1)
+        result["baseline_load_kw"] = (
+            result["peak_hour"].astype(int).map(ieso_lookup).fillna(0.85)
+            .mul(result["proxy_capacity_kw"])
+            .round(1)
+        )
 
         # 7. Grid inequality test
         result["total_load_kw"] = (result["peak_ev_load_kw"] + result["baseline_load_kw"]).round(1)
