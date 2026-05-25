@@ -12,14 +12,13 @@ from spatial_assembler import load_enriched_geodataframe, DATA_DIR
 # ---------------------------------------------------------------------------
 WEIGHTS_JSON = os.path.join(DATA_DIR, "zone_weights.json")
 
-def load_time_weights():
+def _load_time_weights():
     """Load the mathematically derived zone weights calculated from Open Data."""
     if not os.path.exists(WEIGHTS_JSON):
         raise FileNotFoundError(f"Missing {WEIGHTS_JSON}. Run data_preparation/fetch_toronto_traffic.py first.")
     with open(WEIGHTS_JSON, "r") as f:
         return json.load(f)
 
-TIME_WEIGHTS = load_time_weights()
 
 # ---------------------------------------------------------------------------
 # Simulation Constants (Magic Numbers)
@@ -64,13 +63,14 @@ class SimulationEngine:
     def __init__(self):
         print("Loading Master Map Database...")
         self.base_gdf = load_enriched_geodataframe()
+        self.time_weights = _load_time_weights()
 
     def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening"], temperature_celsius: float = 20.0) -> pd.DataFrame:
         """
         Run the granular Monte Carlo lottery to generate thousands of individual EVs.
         """
         # 1. Get the probability weights for the chosen time of day
-        current_weights = TIME_WEIGHTS[time_of_day]
+        current_weights = self.time_weights[time_of_day]
         
         # 2. Assign a weight to every postal code based on its zone type
         fsa_weights = self.base_gdf["zone_type"].map(current_weights).fillna(0)
