@@ -17,12 +17,12 @@ import pulp
 # ---------------------------------------------------------------------------
 # Asset Prescription Rules
 # ---------------------------------------------------------------------------
-CHARGER_PRESCRIPTION = {
-    "residential": {"type": "Level 2 Smart-Charging Hub", "units": 8, "kw_per_unit": 7},
-    "leisure":     {"type": "Level 2 Smart-Charging Hub", "units": 8, "kw_per_unit": 7},
-    "office_park": {"type": "DC Fast Charging Array",     "units": 4, "kw_per_unit": 50},
-    "retail_hub":  {"type": "DC Fast Charging Array",     "units": 4, "kw_per_unit": 50},
-    "transit_hub": {"type": "Ultra-Fast Charging Array",  "units": 4, "kw_per_unit": 150},
+CHARGER_TYPES = {
+    "residential": {"type": "Level 2 Smart-Charging Hub", "kw_per_unit": 7},
+    "leisure":     {"type": "Level 2 Smart-Charging Hub", "kw_per_unit": 7},
+    "office_park": {"type": "DC Fast Charging Array",     "kw_per_unit": 50},
+    "retail_hub":  {"type": "DC Fast Charging Array",     "kw_per_unit": 50},
+    "transit_hub": {"type": "Ultra-Fast Charging Array",  "kw_per_unit": 150},
 }
 
 BESS_HOURS = 2  # Battery buffer sized for 2 hours of peak deficit
@@ -57,7 +57,8 @@ def optimize_placement(grid_df: pd.DataFrame, max_stations: int = 10) -> pd.Data
     if candidates.empty:
         return pd.DataFrame(columns=[
             "fsa", "zone_type", "deficit_kw", "centroid_lat", "centroid_lon",
-            "charger_type", "charger_units", "charger_kw_per_unit", "bess_kwh"
+            "charger_type", "charger_units", "charger_kw_per_unit",
+            "total_charger_kw", "bess_kwh"
         ])
 
     # 2. Infeasibility shield — cap budget at candidate count
@@ -115,17 +116,22 @@ def optimize_placement(grid_df: pd.DataFrame, max_stations: int = 10) -> pd.Data
     else:
         selected_indices = [j for j in range(n) if y[j].varValue and y[j].varValue > 0.5]
 
-    # 6. Build result with prescriptions
+    # 6. Build result with deficit-scaled prescriptions
     selected = candidates.iloc[selected_indices].copy()
 
-    prescriptions = selected["zone_type"].map(CHARGER_PRESCRIPTION)
-    selected["charger_type"] = prescriptions.apply(lambda p: p["type"])
-    selected["charger_units"] = prescriptions.apply(lambda p: p["units"])
-    selected["charger_kw_per_unit"] = prescriptions.apply(lambda p: p["kw_per_unit"])
+    charger_info = selected["zone_type"].map(CHARGER_TYPES)
+    selected["charger_type"] = charger_info.apply(lambda c: c["type"])
+    selected["charger_kw_per_unit"] = charger_info.apply(lambda c: c["kw_per_unit"])
+    # Scale units to cover the deficit: ceil(deficit / kw_per_unit)
+    selected["charger_units"] = (
+        (selected["deficit_kw"] / selected["charger_kw_per_unit"]).apply(math.ceil).clip(lower=1).astype(int)
+    )
+    selected["total_charger_kw"] = selected["charger_units"] * selected["charger_kw_per_unit"]
     selected["bess_kwh"] = (selected["deficit_kw"] * BESS_HOURS).astype(int)
 
     result = selected[["fsa", "zone_type", "deficit_kw", "centroid_lat", "centroid_lon",
-                        "charger_type", "charger_units", "charger_kw_per_unit", "bess_kwh"]]
+                        "charger_type", "charger_units", "charger_kw_per_unit",
+                        "total_charger_kw", "bess_kwh"]]
 
     return result.sort_values("deficit_kw", ascending=False).reset_index(drop=True)
 
@@ -149,6 +155,6 @@ if __name__ == "__main__":
         print(f"\n  Optimal Site: FSA {site['fsa']} ({site['zone_type']})")
         print(f"  Coordinates: ({site['centroid_lat']:.4f}, {site['centroid_lon']:.4f})")
         print(f"  Peak Deficit: +{site['deficit_kw']:.0f} kW")
-        print(f"  Prescribed: {site['charger_units']}x {site['charger_type']}")
+        print(f"  Prescribed: {site['charger_units']}x {site['charger_type']} ({site['total_charger_kw']} kW total)")
         print(f"  BESS Buffer: {site['bess_kwh']} kWh")
     print("\n" + "=" * 80)

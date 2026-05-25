@@ -20,7 +20,7 @@ def test_optimize_placement_returns_expected_columns():
     grid_df = _get_grid_df()
     result = optimize_placement(grid_df, max_stations=5)
     required = {"fsa", "zone_type", "deficit_kw", "centroid_lat", "centroid_lon",
-                "charger_type", "charger_units", "charger_kw_per_unit", "bess_kwh"}
+                "charger_type", "charger_units", "charger_kw_per_unit", "total_charger_kw", "bess_kwh"}
     assert required.issubset(set(result.columns)), f"Missing: {required - set(result.columns)}"
 
 
@@ -71,6 +71,17 @@ def test_optimize_placement_empty_when_no_overload():
     })
     result = optimize_placement(fake_df, max_stations=5)
     assert len(result) == 0
+
+
+def test_optimize_placement_chargers_cover_deficit():
+    """Total charger kW must be >= deficit_kw for each site."""
+    from optimizer import optimize_placement
+    grid_df = _get_grid_df()
+    result = optimize_placement(grid_df, max_stations=10)
+    for _, row in result.iterrows():
+        assert row["total_charger_kw"] >= row["deficit_kw"], (
+            f"FSA {row['fsa']}: {row['total_charger_kw']} kW chargers < {row['deficit_kw']} kW deficit"
+        )
 
 
 def test_optimize_placement_caps_budget_at_candidates():
