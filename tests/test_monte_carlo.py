@@ -63,3 +63,19 @@ def test_aggregate_grid_load_overloaded_flag_consistent():
 
     expected = grid_df["total_load_kw"] > grid_df["proxy_capacity_kw"]
     pd.testing.assert_series_equal(grid_df["overloaded"].reset_index(drop=True), expected.reset_index(drop=True), check_names=False)
+
+
+def test_full_day_simulation_covers_both_peaks():
+    """Full Day mode must produce arrivals in both midday and evening windows."""
+    from monte_carlo import SimulationEngine
+    engine = SimulationEngine()
+    ev_df = engine.run_simulation(num_evs=1000, time_of_day="Full Day")
+    assert len(ev_df) == 1000
+
+    hours = ev_df["arrival_hour_float"]
+    midday_count = ((hours >= 9.0) & (hours <= 15.0)).sum()
+    evening_count = ((hours >= 14.0) & (hours <= 21.0)).sum()
+
+    # Both peaks should have substantial arrivals
+    assert midday_count > 100, f"Too few midday arrivals: {midday_count}"
+    assert evening_count > 400, f"Too few evening arrivals: {evening_count}"
