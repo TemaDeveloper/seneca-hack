@@ -9,7 +9,7 @@ Public API:
         Returns a GeoDataFrame with columns:
             fsa            — Forward Sortation Area code (e.g. "M5H")
             geometry       — Shapely polygon (EPSG:4326)
-            zone_type      — "residential" | "commercial" | "industrial"
+            zone_type      — "residential" | "leisure" | "office_park" | "retail_hub" | "transit_hub"
             proxy_capacity_kw — grid headroom ceiling in kW
             centroid_lat   — polygon centroid latitude
             centroid_lon   — polygon centroid longitude
@@ -56,13 +56,16 @@ def _load_fsa_boundaries() -> gpd.GeoDataFrame:
     gdf = gpd.read_file(FSA_GEOJSON)
 
     # Validate / reproject CRS
-    if gdf.crs is None or gdf.crs.to_epsg() != EXPECTED_CRS_EPSG:
+    if gdf.crs is None:
+        gdf = gdf.set_crs(epsg=EXPECTED_CRS_EPSG)
+    elif gdf.crs.to_epsg() != EXPECTED_CRS_EPSG:
         gdf = gdf.to_crs(epsg=EXPECTED_CRS_EPSG)
 
     # Drop any rows with null geometry
     null_geom_count = gdf["geometry"].isna().sum()
     if null_geom_count > 0:
         gdf = gdf.dropna(subset=["geometry"])
+        gdf = gdf.reset_index(drop=True)
         print(f"Warning: dropped {null_geom_count} FSAs with null geometry")
 
     return gdf
@@ -94,7 +97,7 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
 
     Pipeline:
         1. Load FSA boundary polygons (EPSG:4326)
-        2. Join zone classification (residential / commercial / industrial)
+        2. Join zone classification (residential / leisure / office_park / retail_hub / transit_hub)
         3. Assign proxy grid capacity headroom per zone type
         4. Compute polygon centroids for marker placement
 
@@ -109,6 +112,11 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
     # Step 2: Join zone classification
     zones = _load_zone_classification()
     gdf = gdf.merge(zones, on="fsa", how="left")
+
+    # Guard against duplicate FSAs from zone CSV
+    if gdf["fsa"].duplicated().any():
+        print(f"Warning: duplicate FSAs after zone merge — keeping first occurrence")
+        gdf = gdf.drop_duplicates(subset="fsa", keep="first").reset_index(drop=True)
 
     # Any FSAs missing classification default to residential
     unclassified = gdf["zone_type"].isna().sum()
@@ -131,9 +139,9 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
     # Project to UTM 17N for accurate centroid, then extract lat/lon
     gdf_projected = gdf.to_crs(epsg=32617)
     centroids_projected = gdf_projected["geometry"].centroid
-    centroids_wgs84 = gpd.GeoSeries(centroids_projected, crs=32617).to_crs(epsg=4326)
-    gdf["centroid_lat"] = centroids_wgs84.y
-    gdf["centroid_lon"] = centroids_wgs84.x
+    centroids_wgs84 = gpd.GeoSeries(centroids_projected.values, crs=32617).to_crs(epsg=4326)
+    gdf["centroid_lat"] = centroids_wgs84.y.values
+    gdf["centroid_lon"] = centroids_wgs84.x.values
 
     return gdf
 
