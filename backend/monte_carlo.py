@@ -1,0 +1,305 @@
+import os
+import json
+import numpy as np
+import pandas as pd
+from typing import Literal
+
+# Import the map database from Phase 1
+from spatial_assembler import load_enriched_geodataframe, DATA_DIR
+
+# ---------------------------------------------------------------------------
+# Probability Weights (Gravity Models)
+# ---------------------------------------------------------------------------
+WEIGHTS_JSON = os.path.join(DATA_DIR, "zone_weights.json")
+
+def _load_time_weights():
+    """Load the mathematically derived zone weights calculated from Open Data."""
+    if not os.path.exists(WEIGHTS_JSON):
+        raise FileNotFoundError(f"Missing {WEIGHTS_JSON}. Run data_preparation/fetch_toronto_traffic.py first.")
+    with open(WEIGHTS_JSON, "r") as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Simulation Constants (Magic Numbers)
+# ---------------------------------------------------------------------------
+# Temporal (Arrival Time) Constants
+MORNING_PEAK_HOUR = 8.25        # 8:15 AM
+MORNING_PEAK_STD = 1.0          # 1 hour standard deviation
+MORNING_START_CLIP = 6.0        # Earliest arrival 6:00 AM
+MORNING_END_CLIP = 11.5         # Latest arrival 11:30 AM
+
+EVENING_PEAK_HOUR = 17.5        # 5:30 PM
+EVENING_PEAK_STD = 1.5          # 1.5 hours standard deviation
+EVENING_START_CLIP = 14.0       # Earliest arrival 2:00 PM
+EVENING_END_CLIP = 21.0         # Latest arrival 9:00 PM
+
+# Full Day Mixture Model Constants (from blueprint)
+FULLDAY_EVENING_WEIGHT = 0.70     # 70% of vehicles arrive in evening peak
+FULLDAY_MIDDAY_WEIGHT = 0.30      # 30% arrive in midday peak
+MIDDAY_PEAK_HOUR = 12.0           # Noon
+MIDDAY_PEAK_STD = 2.0             # 2 hours standard deviation
+MIDDAY_START_CLIP = 9.0           # Earliest midday arrival 9:00 AM
+MIDDAY_END_CLIP = 15.0            # Latest midday arrival 3:00 PM
+
+# State of Charge (Battery) Constants
+SOC_GAMMA_SHAPE = 3.0
+SOC_GAMMA_SCALE = 5.0
+SOC_BASE_KWH = 5.0
+
+# Winter Physics Constants
+OPTIMAL_TEMP_C = 20.0           # Ideal battery temperature
+TEMP_EFFICIENCY_LOSS_PER_DEGREE = 0.0085  # ~0.85% loss per degree below optimal
+MAX_EFFICIENCY_LOSS = 0.40      # Cap maximum efficiency loss at 40%
+
+# Charger Power Draw Constants (kW)
+CHARGER_POWER_KW = {
+    "residential": 7.0,     # Level 2 home charger
+    "leisure":     7.0,     # Level 2 public charger
+    "office_park": 50.0,    # DC Fast charger at workplace
+    "retail_hub":  50.0,    # DC Fast charger at mall
+    "transit_hub": 150.0,   # Ultra-fast charger at transit hub
+}
+
+def float_to_time(hours: float) -> str:
+    """Convert a float hour (e.g. 8.5) to a formatted string (08:30 AM)."""
+    hours = max(0.0, min(23.99, hours))  # clamp
+    h = int(hours)
+    m = int((hours - h) * 60)
+    period = "AM" if h < 12 else "PM"
+    h_12 = h if h <= 12 else h - 12
+    h_12 = 12 if h_12 == 0 else h_12
+    return f"{h_12:02d}:{m:02d} {period}"
+
+class SimulationEngine:
+    """
+    Phase 2: Monte Carlo Agent-Based Simulation Engine.
+    Tracks every individual EV with arrival times and battery deficiencies.
+    """
+    
+    def __init__(self):
+        print("Loading Master Map Database...")
+        self.base_gdf = load_enriched_geodataframe()
+        self.time_weights = _load_time_weights()
+        self.ieso_profile = self._load_ieso_profile()
+
+    @staticmethod
+    def _load_ieso_profile() -> pd.DataFrame:
+        """Load the 24-hour IESO baseline load profile."""
+        ieso_path = os.path.join(DATA_DIR, "ieso_load_profile.csv")
+        if not os.path.exists(ieso_path):
+            raise FileNotFoundError(f"Missing {ieso_path}. Run data_preparation/prepare_data.py first.")
+        return pd.read_csv(ieso_path)
+
+    def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening", "Full Day"], temperature_celsius: float = 20.0) -> pd.DataFrame:
+        """
+        Run the granular Monte Carlo lottery to generate thousands of individual EVs.
+        """
+        # 1. Get the probability weights for the chosen time of day
+        if time_of_day == "Full Day":
+            # Blend morning and evening weights for full-day simulation
+            morning_w = self.time_weights["Morning"]
+            evening_w = self.time_weights["Evening"]
+            current_weights = {
+                zone: morning_w.get(zone, 0) * FULLDAY_MIDDAY_WEIGHT + evening_w.get(zone, 0) * FULLDAY_EVENING_WEIGHT
+                for zone in set(list(morning_w.keys()) + list(evening_w.keys()))
+            }
+        else:
+            current_weights = self.time_weights[time_of_day]
+        
+        # 2. Assign a weight to every postal code based on its zone type
+        fsa_weights = self.base_gdf["zone_type"].map(current_weights).fillna(0)
+        
+        # 3. Normalize the weights so they all add up to exactly 1.0 (a perfect probability distribution)
+        probabilities = fsa_weights / fsa_weights.sum()
+        
+        # 4. SPATIAL SAMPLING (Where do they park?)
+        # Roll a weighted die `num_evs` times to pick destinations
+        chosen_fsas = np.random.choice(
+            self.base_gdf["fsa"], 
+            size=num_evs, 
+            p=probabilities
+        )
+        
+        # 5. TEMPORAL SAMPLING (When do they arrive?)
+        if time_of_day == "Morning":
+            # Bell curve clustered around Morning Peak
+            raw_times = np.random.normal(loc=MORNING_PEAK_HOUR, scale=MORNING_PEAK_STD, size=num_evs)
+            raw_times = np.clip(raw_times, MORNING_START_CLIP, MORNING_END_CLIP)
+        elif time_of_day == "Full Day":
+            # Blueprint mixture model: 70% evening + 30% midday
+            n_evening = int(num_evs * FULLDAY_EVENING_WEIGHT)
+            n_midday = num_evs - n_evening
+
+            evening_times = np.random.normal(loc=EVENING_PEAK_HOUR, scale=EVENING_PEAK_STD, size=n_evening)
+            evening_times = np.clip(evening_times, EVENING_START_CLIP, EVENING_END_CLIP)
+
+            midday_times = np.random.normal(loc=MIDDAY_PEAK_HOUR, scale=MIDDAY_PEAK_STD, size=n_midday)
+            midday_times = np.clip(midday_times, MIDDAY_START_CLIP, MIDDAY_END_CLIP)
+
+            raw_times = np.concatenate([evening_times, midday_times])
+            np.random.shuffle(raw_times)
+        else:
+            # Bell curve clustered around Evening Peak
+            raw_times = np.random.normal(loc=EVENING_PEAK_HOUR, scale=EVENING_PEAK_STD, size=num_evs)
+            raw_times = np.clip(raw_times, EVENING_START_CLIP, EVENING_END_CLIP)
+            
+        formatted_times = [float_to_time(t) for t in raw_times]
+        
+        # 6. SOC DEFICIENCY SAMPLING (How much battery do they need?)
+        soc_needed = np.random.gamma(shape=SOC_GAMMA_SHAPE, scale=SOC_GAMMA_SCALE, size=num_evs) + SOC_BASE_KWH
+        
+        # Apply Canadian Winter Battery Drain (Efficiency Loss)
+        if temperature_celsius < OPTIMAL_TEMP_C:
+            temp_diff = OPTIMAL_TEMP_C - temperature_celsius
+            efficiency_loss = min(MAX_EFFICIENCY_LOSS, temp_diff * TEMP_EFFICIENCY_LOSS_PER_DEGREE)
+            efficiency_factor = 1.0 - efficiency_loss
+            
+            # The car must pull MORE electricity to cover the exact same driving distance
+            soc_needed = soc_needed / efficiency_factor
+            
+        soc_needed = np.round(soc_needed, 1)
+        
+        # 7. ASSEMBLE THE AGENT DATASET
+        ev_df = pd.DataFrame({
+            "vehicle_id": [f"EV_{str(i).zfill(5)}" for i in range(1, num_evs + 1)],
+            "fsa": chosen_fsas,
+            "arrival_time": formatted_times,
+            "arrival_hour_float": raw_times,
+            "soc_needed_kwh": soc_needed
+        })
+
+        # Merge to attach the zone_type to the granular dataset
+        ev_df = ev_df.merge(self.base_gdf[["fsa", "zone_type"]], on="fsa", how="left")
+
+        # Reorder columns cleanly
+        ev_df = ev_df[["vehicle_id", "fsa", "zone_type", "arrival_time", "arrival_hour_float", "soc_needed_kwh"]]
+        
+        return ev_df
+
+    def aggregate_grid_load(self, ev_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Aggregate individual EV records into per-FSA grid load results.
+
+        Uses a duration-aware model: each EV charges for soc_needed_kwh / charger_kw
+        hours. Only EVs actively charging during a given hour contribute to grid load.
+        This makes soc_needed_kwh and temperature directly affect grid stress.
+
+        Pipeline:
+            1. Assign charger power draw (kW) based on zone type
+            2. Compute charging duration from SoC deficiency
+            3. Determine which hours each EV is actively charging
+            4. GroupBy (FSA, hour) to compute concurrent load
+            5. Find peak hour per FSA
+            6. Merge with base GeoDataFrame for capacity and coordinates
+            7. Add IESO baseline load at peak hour
+            8. Run grid inequality test
+
+        Returns:
+            DataFrame with columns: fsa, zone_type, proxy_capacity_kw,
+            peak_hour, peak_ev_load_kw, baseline_load_kw, total_load_kw,
+            overloaded, deficit_kw, centroid_lat, centroid_lon
+        """
+        # 1. Assign charger power draw based on zone type
+        ev_df = ev_df.copy()
+        ev_df["charger_kw"] = ev_df["zone_type"].map(CHARGER_POWER_KW).fillna(7.0)
+
+        # 2. Compute charging duration (hours) from SoC deficiency
+        ev_df["charge_duration_h"] = ev_df["soc_needed_kwh"] / ev_df["charger_kw"]
+        ev_df["departure_hour"] = ev_df["arrival_hour_float"] + ev_df["charge_duration_h"]
+
+        # 3. Determine which integer hours each EV is actively charging
+        # An EV is active during hour H if it arrived before H+1 and departs after H
+        hour_min = int(ev_df["arrival_hour_float"].min())
+        hour_max = min(23, int(ev_df["departure_hour"].max()))
+        hours_range = range(hour_min, hour_max + 1)
+
+        # Build a list of (fsa, hour, charger_kw) for each EV-hour it's active
+        records = []
+        arrivals = ev_df["arrival_hour_float"].values
+        departures = ev_df["departure_hour"].values
+        fsas = ev_df["fsa"].values
+        charger_kws = ev_df["charger_kw"].values
+
+        for h in hours_range:
+            # Vectorized: which EVs are active during hour h?
+            active_mask = (arrivals < h + 1) & (departures > h)
+            if not active_mask.any():
+                continue
+            active_fsas = fsas[active_mask]
+            active_kws = charger_kws[active_mask]
+
+            # Sum kW per FSA for this hour
+            for fsa_val in np.unique(active_fsas):
+                fsa_mask = active_fsas == fsa_val
+                total_kw = active_kws[fsa_mask].sum()
+                records.append({"fsa": fsa_val, "hour": h, "ev_load_kw": total_kw})
+
+        if not records:
+            # No active charging at all — return empty result
+            return pd.DataFrame(columns=["fsa", "zone_type", "proxy_capacity_kw", "peak_hour",
+                                         "peak_ev_load_kw", "baseline_load_kw", "total_load_kw",
+                                         "overloaded", "deficit_kw", "centroid_lat", "centroid_lon"])
+
+        hourly_load = pd.DataFrame(records)
+
+        # 4. Find peak hour per FSA (hour with max EV load)
+        idx_peak = hourly_load.groupby("fsa")["ev_load_kw"].idxmax()
+        peak_load = hourly_load.loc[idx_peak].rename(
+            columns={"ev_load_kw": "peak_ev_load_kw", "hour": "peak_hour"}
+        )
+
+        # 5. Merge with base GeoDataFrame to get capacity and coordinates
+        result = peak_load.merge(
+            self.base_gdf[["fsa", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"]],
+            on="fsa", how="left"
+        )
+
+        # 6. Add IESO baseline load at peak hour
+        ieso_lookup = self.ieso_profile.set_index("hour")["load_fraction"]
+        result["baseline_load_kw"] = (
+            result["peak_hour"].astype(int).map(ieso_lookup).fillna(0.85)
+            .mul(result["proxy_capacity_kw"])
+            .round(1)
+        )
+
+        # 7. Grid inequality test
+        result["total_load_kw"] = (result["peak_ev_load_kw"] + result["baseline_load_kw"]).round(1)
+        result["overloaded"] = result["total_load_kw"] > result["proxy_capacity_kw"]
+        result["deficit_kw"] = (result["total_load_kw"] - result["proxy_capacity_kw"]).clip(lower=0).round(1)
+
+        # Clean column order
+        result = result[["fsa", "zone_type", "proxy_capacity_kw", "peak_hour",
+                         "peak_ev_load_kw", "baseline_load_kw", "total_load_kw",
+                         "overloaded", "deficit_kw", "centroid_lat", "centroid_lon"]]
+
+        return result.sort_values("deficit_kw", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# CLI Test Runner
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    engine = SimulationEngine()
+
+    # Run a test simulation in deep Canadian Winter
+    sim_results = engine.run_simulation(num_evs=15000, time_of_day="Full Day", temperature_celsius=-15.0)
+
+    print("\n========================================================")
+    print("GRANULAR SIMULATION: 15,000 EVs (Full Day Mixture @ -15C)")
+    print("=========================================================")
+    print(sim_results.head(10).to_string(index=False))
+
+    # Aggregate into grid load results
+    grid_results = engine.aggregate_grid_load(sim_results)
+
+    print("\n========================================================")
+    print("GRID LOAD RESULTS (Per-FSA)")
+    print("========================================================")
+    print(grid_results.head(15).to_string(index=False))
+
+    overloaded_count = grid_results["overloaded"].sum()
+    total_fsas = len(grid_results)
+    print(f"\n[RESULT] {overloaded_count}/{total_fsas} FSAs overloaded.")
+    print(f"[RESULT] Max deficit: {grid_results['deficit_kw'].max():.0f} kW")
+    print("========================================================")

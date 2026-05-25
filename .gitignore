@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Project specific data (raw downloads & temp files)
+backend/data/_raw_fsa/
+backend/data/fsa_boundaries_raw.zip
+
+# Note: We are explicitly NOT ignoring the generated GeoJSON and CSV files 
+# in backend/data/ so that the project can be cloned and run instantly 
+# without needing to hit the ArcGIS API or Statistics Canada servers again.
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
