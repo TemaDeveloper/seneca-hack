@@ -43,3 +43,14 @@ The final output is a massive, highly granular dataset tracking every single car
 | EV_00005   | L0B | residential| 10:45 AM    | 25.4           |
 
 Phase 2 officially hands this detailed vehicle ledger over to **Phase 3 (The AI Grid Optimizer)**, which will group the cars by arrival hour, attach them to the grid capacity limits, and calculate the electrical explosions!
+
+---
+
+## Advanced Feature: Canadian Winter Battery Drain
+EVs lose up to 30% of their battery efficiency in freezing Canadian winters. The Monte Carlo engine includes a highly advanced `temperature_celsius` parameter. 
+- If the simulation is run at **-15°C**, the algorithm mathematically penalizes the Gamma Distribution. 
+- Every single simulated car arrives needing up to **30% more electricity (soc_needed_kwh)** to cover the exact same physical driving distance, creating a massive seasonal stress-test for the grid.
+
+## Future Upgrade Idea: The Evening Commute Correction
+The Open Data dataset counts raw intersection volume, meaning it doesn't know if cars are *arriving* or *leaving*. High traffic at an Office Park at 5:00 PM means people are arriving to plug in, when in reality, they are driving home. 
+A proposed future upgrade is to write a "Correction Factor" that programmatically slashes the Evening weight for Office Parks by 80% and boosts Residential, mathematically forcing the simulation to send everyone home to charge at night.

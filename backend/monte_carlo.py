@@ -21,6 +21,30 @@ def load_time_weights():
 
 TIME_WEIGHTS = load_time_weights()
 
+# ---------------------------------------------------------------------------
+# Simulation Constants (Magic Numbers)
+# ---------------------------------------------------------------------------
+# Temporal (Arrival Time) Constants
+MORNING_PEAK_HOUR = 8.25        # 8:15 AM
+MORNING_PEAK_STD = 1.0          # 1 hour standard deviation
+MORNING_START_CLIP = 6.0        # Earliest arrival 6:00 AM
+MORNING_END_CLIP = 11.5         # Latest arrival 11:30 AM
+
+EVENING_PEAK_HOUR = 17.5        # 5:30 PM
+EVENING_PEAK_STD = 1.5          # 1.5 hours standard deviation
+EVENING_START_CLIP = 14.0       # Earliest arrival 2:00 PM
+EVENING_END_CLIP = 21.0         # Latest arrival 9:00 PM
+
+# State of Charge (Battery) Constants
+SOC_GAMMA_SHAPE = 3.0
+SOC_GAMMA_SCALE = 5.0
+SOC_BASE_KWH = 5.0
+
+# Winter Physics Constants
+OPTIMAL_TEMP_C = 20.0           # Ideal battery temperature
+TEMP_EFFICIENCY_LOSS_PER_DEGREE = 0.0085  # ~0.85% loss per degree below optimal
+MAX_EFFICIENCY_LOSS = 0.40      # Cap maximum efficiency loss at 40%
+
 def float_to_time(hours: float) -> str:
     """Convert a float hour (e.g. 8.5) to a formatted string (08:30 AM)."""
     hours = max(0.0, min(23.99, hours))  # clamp
@@ -41,7 +65,7 @@ class SimulationEngine:
         print("Loading Master Map Database...")
         self.base_gdf = load_enriched_geodataframe()
 
-    def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening"]) -> pd.DataFrame:
+    def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening"], temperature_celsius: float = 20.0) -> pd.DataFrame:
         """
         Run the granular Monte Carlo lottery to generate thousands of individual EVs.
         """
@@ -64,19 +88,28 @@ class SimulationEngine:
         
         # 5. TEMPORAL SAMPLING (When do they arrive?)
         if time_of_day == "Morning":
-            # Bell curve clustered around 8:15 AM
-            raw_times = np.random.normal(loc=8.25, scale=1.0, size=num_evs)
-            raw_times = np.clip(raw_times, 6.0, 11.5)
+            # Bell curve clustered around Morning Peak
+            raw_times = np.random.normal(loc=MORNING_PEAK_HOUR, scale=MORNING_PEAK_STD, size=num_evs)
+            raw_times = np.clip(raw_times, MORNING_START_CLIP, MORNING_END_CLIP)
         else:
-            # Bell curve clustered around 5:30 PM
-            raw_times = np.random.normal(loc=17.5, scale=1.5, size=num_evs)
-            raw_times = np.clip(raw_times, 14.0, 21.0)
+            # Bell curve clustered around Evening Peak
+            raw_times = np.random.normal(loc=EVENING_PEAK_HOUR, scale=EVENING_PEAK_STD, size=num_evs)
+            raw_times = np.clip(raw_times, EVENING_START_CLIP, EVENING_END_CLIP)
             
         formatted_times = [float_to_time(t) for t in raw_times]
         
         # 6. SOC DEFICIENCY SAMPLING (How much battery do they need?)
-        # Use a Gamma distribution: Mean = 15kWh. Add base of 5kWh so minimum is 5kWh. Total Mean ~20kWh.
-        soc_needed = np.random.gamma(shape=3.0, scale=5.0, size=num_evs) + 5.0
+        soc_needed = np.random.gamma(shape=SOC_GAMMA_SHAPE, scale=SOC_GAMMA_SCALE, size=num_evs) + SOC_BASE_KWH
+        
+        # Apply Canadian Winter Battery Drain (Efficiency Loss)
+        if temperature_celsius < OPTIMAL_TEMP_C:
+            temp_diff = OPTIMAL_TEMP_C - temperature_celsius
+            efficiency_loss = min(MAX_EFFICIENCY_LOSS, temp_diff * TEMP_EFFICIENCY_LOSS_PER_DEGREE)
+            efficiency_factor = 1.0 - efficiency_loss
+            
+            # The car must pull MORE electricity to cover the exact same driving distance
+            soc_needed = soc_needed / efficiency_factor
+            
         soc_needed = np.round(soc_needed, 1)
         
         # 7. ASSEMBLE THE AGENT DATASET
@@ -102,11 +135,11 @@ class SimulationEngine:
 if __name__ == "__main__":
     engine = SimulationEngine()
     
-    # Run a test simulation
-    sim_results = engine.run_simulation(num_evs=15000, time_of_day="Morning")
+    # Run a test simulation in deep Canadian Winter
+    sim_results = engine.run_simulation(num_evs=15000, time_of_day="Morning", temperature_celsius=-15.0)
     
     print("\n========================================================")
-    print("GRANULAR SIMULATION RESULTS: 15,000 EVs (Morning Commute)")
+    print("GRANULAR SIMULATION RESULTS: 15,000 EVs (Morning Commute @ -15°C)")
     print("========================================================")
     
     # Print a beautiful sample of the granular dataset
