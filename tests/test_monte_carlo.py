@@ -1,6 +1,7 @@
 import pytest
 import os
 import sys
+import numpy as np
 import pandas as pd
 
 # Add backend to path
@@ -79,3 +80,22 @@ def test_full_day_simulation_covers_both_peaks():
     # Both peaks should have substantial arrivals
     assert midday_count > 100, f"Too few midday arrivals: {midday_count}"
     assert evening_count > 400, f"Too few evening arrivals: {evening_count}"
+
+
+def test_winter_temperature_increases_grid_load():
+    """Cold temperature must increase grid load via longer charging duration."""
+    from monte_carlo import SimulationEngine
+
+    engine = SimulationEngine()
+    np.random.seed(42)
+    ev_summer = engine.run_simulation(num_evs=2000, time_of_day="Evening", temperature_celsius=20.0)
+    grid_summer = engine.aggregate_grid_load(ev_summer)
+
+    np.random.seed(42)
+    ev_winter = engine.run_simulation(num_evs=2000, time_of_day="Evening", temperature_celsius=-15.0)
+    grid_winter = engine.aggregate_grid_load(ev_winter)
+
+    # Winter must produce higher total load than summer (same seed = same spatial/temporal draws)
+    summer_total = grid_summer["total_load_kw"].sum()
+    winter_total = grid_winter["total_load_kw"].sum()
+    assert winter_total > summer_total, f"Winter ({winter_total}) should exceed summer ({summer_total})"

@@ -181,14 +181,19 @@ class SimulationEngine:
         """
         Aggregate individual EV records into per-FSA grid load results.
 
+        Uses a duration-aware model: each EV charges for soc_needed_kwh / charger_kw
+        hours. Only EVs actively charging during a given hour contribute to grid load.
+        This makes soc_needed_kwh and temperature directly affect grid stress.
+
         Pipeline:
             1. Assign charger power draw (kW) based on zone type
-            2. Extract arrival hour as integer
-            3. GroupBy (FSA, hour) to compute concurrent load
-            4. Find peak hour per FSA
-            5. Merge with base GeoDataFrame for capacity and coordinates
-            6. Add IESO baseline load at peak hour
-            7. Run grid inequality test
+            2. Compute charging duration from SoC deficiency
+            3. Determine which hours each EV is actively charging
+            4. GroupBy (FSA, hour) to compute concurrent load
+            5. Find peak hour per FSA
+            6. Merge with base GeoDataFrame for capacity and coordinates
+            7. Add IESO baseline load at peak hour
+            8. Run grid inequality test
 
         Returns:
             DataFrame with columns: fsa, zone_type, proxy_capacity_kw,
@@ -199,17 +204,49 @@ class SimulationEngine:
         ev_df = ev_df.copy()
         ev_df["charger_kw"] = ev_df["zone_type"].map(CHARGER_POWER_KW).fillna(7.0)
 
-        # 2. Extract arrival hour as integer for grouping
-        ev_df["arrival_hour"] = ev_df["arrival_hour_float"].astype(int)
+        # 2. Compute charging duration (hours) from SoC deficiency
+        ev_df["charge_duration_h"] = ev_df["soc_needed_kwh"] / ev_df["charger_kw"]
+        ev_df["departure_hour"] = ev_df["arrival_hour_float"] + ev_df["charge_duration_h"]
 
-        # 3. GroupBy (FSA, hour) to get concurrent charger draw
-        hourly_load = ev_df.groupby(["fsa", "arrival_hour"])["charger_kw"].sum().reset_index()
-        hourly_load.rename(columns={"charger_kw": "ev_load_kw"}, inplace=True)
+        # 3. Determine which integer hours each EV is actively charging
+        # An EV is active during hour H if it arrived before H+1 and departs after H
+        hour_min = int(ev_df["arrival_hour_float"].min())
+        hour_max = min(23, int(ev_df["departure_hour"].max()))
+        hours_range = range(hour_min, hour_max + 1)
+
+        # Build a list of (fsa, hour, charger_kw) for each EV-hour it's active
+        records = []
+        arrivals = ev_df["arrival_hour_float"].values
+        departures = ev_df["departure_hour"].values
+        fsas = ev_df["fsa"].values
+        charger_kws = ev_df["charger_kw"].values
+
+        for h in hours_range:
+            # Vectorized: which EVs are active during hour h?
+            active_mask = (arrivals < h + 1) & (departures > h)
+            if not active_mask.any():
+                continue
+            active_fsas = fsas[active_mask]
+            active_kws = charger_kws[active_mask]
+
+            # Sum kW per FSA for this hour
+            for fsa_val in np.unique(active_fsas):
+                fsa_mask = active_fsas == fsa_val
+                total_kw = active_kws[fsa_mask].sum()
+                records.append({"fsa": fsa_val, "hour": h, "ev_load_kw": total_kw})
+
+        if not records:
+            # No active charging at all — return empty result
+            return pd.DataFrame(columns=["fsa", "zone_type", "proxy_capacity_kw", "peak_hour",
+                                         "peak_ev_load_kw", "baseline_load_kw", "total_load_kw",
+                                         "overloaded", "deficit_kw", "centroid_lat", "centroid_lon"])
+
+        hourly_load = pd.DataFrame(records)
 
         # 4. Find peak hour per FSA (hour with max EV load)
         idx_peak = hourly_load.groupby("fsa")["ev_load_kw"].idxmax()
         peak_load = hourly_load.loc[idx_peak].rename(
-            columns={"ev_load_kw": "peak_ev_load_kw", "arrival_hour": "peak_hour"}
+            columns={"ev_load_kw": "peak_ev_load_kw", "hour": "peak_hour"}
         )
 
         # 5. Merge with base GeoDataFrame to get capacity and coordinates
