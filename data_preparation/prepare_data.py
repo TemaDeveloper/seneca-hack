@@ -267,17 +267,17 @@ def generate_zone_classification():
     centroids_projected = gdf_projected["geometry"].centroid
     centroids = gpd.GeoSeries(centroids_projected, crs=32617).to_crs(epsg=4326)
     
-    for i, row in gdf.iterrows():
+    for idx, (_, row) in enumerate(gdf.iterrows()):
         fsa = row["fsa"]
-        lon = centroids.iloc[i].x
-        lat = centroids.iloc[i].y
-        
+        lon = centroids.iloc[idx].x
+        lat = centroids.iloc[idx].y
+
         # Make the HTTP call
         zone_type = client.get_zone_type(lon, lat, fsa)
         records.append({"fsa": fsa, "zone_type": zone_type})
-        
-        if (i + 1) % 50 == 0:
-            print(f"  Processed {i + 1}/{len(gdf)} FSAs...")
+
+        if (idx + 1) % 50 == 0:
+            print(f"  Processed {idx + 1}/{len(gdf)} FSAs...")
 
     df = pd.DataFrame(records)
     df.to_csv(ZONE_CSV_PATH, index=False)
