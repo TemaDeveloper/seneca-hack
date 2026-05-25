@@ -1,36 +1,40 @@
+import os
+import json
 import numpy as np
 import pandas as pd
 from typing import Literal
 
 # Import the map database from Phase 1
-from spatial_assembler import load_enriched_geodataframe
+from spatial_assembler import load_enriched_geodataframe, DATA_DIR
 
-# (Power Draw math moved to Phase 3)# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Probability Weights (Gravity Models)
 # ---------------------------------------------------------------------------
-# Defines the mathematical attraction of each zone depending on the time of day.
-TIME_WEIGHTS = {
-    "Morning": {
-        "office_park": 4.0,   # Everyone going to work
-        "retail_hub": 2.0,    # Some morning coffee/shopping
-        "transit_hub": 1.0,   # Park & Ride commuters / Airport drop-offs
-        "leisure": 0.5,       # Empty parks
-        "residential": 0.1,   # Everyone left home
-    },
-    "Evening": {
-        "residential": 4.0,   # Everyone going home
-        "retail_hub": 3.0,    # Evening shopping/dinner
-        "leisure": 2.5,       # Parks, events
-        "transit_hub": 0.5,   # Late flights / pickups
-        "office_park": 0.2,   # Empty offices
-    }
-}
+WEIGHTS_JSON = os.path.join(DATA_DIR, "zone_weights.json")
 
+def load_time_weights():
+    """Load the mathematically derived zone weights calculated from Open Data."""
+    if not os.path.exists(WEIGHTS_JSON):
+        raise FileNotFoundError(f"Missing {WEIGHTS_JSON}. Run data_preparation/fetch_toronto_traffic.py first.")
+    with open(WEIGHTS_JSON, "r") as f:
+        return json.load(f)
+
+TIME_WEIGHTS = load_time_weights()
+
+def float_to_time(hours: float) -> str:
+    """Convert a float hour (e.g. 8.5) to a formatted string (08:30 AM)."""
+    hours = max(0.0, min(23.99, hours))  # clamp
+    h = int(hours)
+    m = int((hours - h) * 60)
+    period = "AM" if h < 12 else "PM"
+    h_12 = h if h <= 12 else h - 12
+    h_12 = 12 if h_12 == 0 else h_12
+    return f"{h_12:02d}:{m:02d} {period}"
 
 class SimulationEngine:
     """
-    Phase 2: Monte Carlo Simulation Engine.
-    Drops simulated EVs onto the map and calculates grid stress.
+    Phase 2: Monte Carlo Agent-Based Simulation Engine.
+    Tracks every individual EV with arrival times and battery deficiencies.
     """
     
     def __init__(self):
@@ -39,7 +43,7 @@ class SimulationEngine:
 
     def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening"]) -> pd.DataFrame:
         """
-        Run the Monte Carlo lottery to distribute cars and calculate grid load.
+        Run the granular Monte Carlo lottery to generate thousands of individual EVs.
         """
         # 1. Get the probability weights for the chosen time of day
         current_weights = TIME_WEIGHTS[time_of_day]
@@ -50,26 +54,46 @@ class SimulationEngine:
         # 3. Normalize the weights so they all add up to exactly 1.0 (a perfect probability distribution)
         probabilities = fsa_weights / fsa_weights.sum()
         
-        # 4. THE MONTE CARLO LOTTERY
+        # 4. SPATIAL SAMPLING (Where do they park?)
         # Roll a weighted die `num_evs` times to pick destinations
-        print(f"Simulating {num_evs:,} electric vehicles driving in the {time_of_day}...")
         chosen_fsas = np.random.choice(
             self.base_gdf["fsa"], 
             size=num_evs, 
             p=probabilities
         )
         
-        # 5. Count how many cars landed in each postal code
-        ev_counts = pd.Series(chosen_fsas).value_counts().reset_index()
-        ev_counts.columns = ["fsa", "ev_count"]
+        # 5. TEMPORAL SAMPLING (When do they arrive?)
+        if time_of_day == "Morning":
+            # Bell curve clustered around 8:15 AM
+            raw_times = np.random.normal(loc=8.25, scale=1.0, size=num_evs)
+            raw_times = np.clip(raw_times, 6.0, 11.5)
+        else:
+            # Bell curve clustered around 5:30 PM
+            raw_times = np.random.normal(loc=17.5, scale=1.5, size=num_evs)
+            raw_times = np.clip(raw_times, 14.0, 21.0)
+            
+        formatted_times = [float_to_time(t) for t in raw_times]
         
-        # 6. Merge the car counts back onto the master map
-        result_df = self.base_gdf.copy()
-        result_df = result_df.merge(ev_counts, on="fsa", how="left")
-        result_df["ev_count"] = result_df["ev_count"].fillna(0).astype(int)
+        # 6. SOC DEFICIENCY SAMPLING (How much battery do they need?)
+        # Use a Gamma distribution: Mean = 15kWh. Add base of 5kWh so minimum is 5kWh. Total Mean ~20kWh.
+        soc_needed = np.random.gamma(shape=3.0, scale=5.0, size=num_evs) + 5.0
+        soc_needed = np.round(soc_needed, 1)
         
-        # (Grid Math moved to Phase 3)
-        return result_df
+        # 7. ASSEMBLE THE AGENT DATASET
+        ev_df = pd.DataFrame({
+            "vehicle_id": [f"EV_{str(i).zfill(5)}" for i in range(1, num_evs + 1)],
+            "fsa": chosen_fsas,
+            "arrival_time": formatted_times,
+            "soc_needed_kwh": soc_needed
+        })
+        
+        # Merge to attach the zone_type to the granular dataset
+        ev_df = ev_df.merge(self.base_gdf[["fsa", "zone_type"]], on="fsa", how="left")
+        
+        # Reorder columns cleanly
+        ev_df = ev_df[["vehicle_id", "fsa", "zone_type", "arrival_time", "soc_needed_kwh"]]
+        
+        return ev_df
 
 
 # ---------------------------------------------------------------------------
@@ -82,12 +106,11 @@ if __name__ == "__main__":
     sim_results = engine.run_simulation(num_evs=15000, time_of_day="Morning")
     
     print("\n========================================================")
-    print("SIMULATION RESULTS: 15,000 EVs (Morning Commute)")
+    print("GRANULAR SIMULATION RESULTS: 15,000 EVs (Morning Commute)")
     print("========================================================")
     
-    # Sort by where the most cars went
-    top_destinations = sim_results.sort_values(by="ev_count", ascending=False).head(10)
+    # Print a beautiful sample of the granular dataset
+    print(sim_results.head(15).to_string(index=False))
     
-    # Print the clean output
-    display_cols = ["fsa", "zone_type", "ev_count"]
-    print(top_destinations[display_cols].to_string(index=False))
+    print("\n[OK] Engine successfully generated 15,000 individual agents.")
+    print("========================================================")
