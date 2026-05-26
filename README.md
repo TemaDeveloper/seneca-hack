@@ -146,11 +146,11 @@ For 100k+ population experiments, use bounded-memory batched aggregation:
 
 ```bash
 PYTHONPATH=backend uv run python data_preparation/benchmark_simulation_scale.py \
-  --real-grid --num-people 200000 --batch-size 25000 --edge-flow-detail fsa \
-  --max-seconds 600 --output-json backend/data/validation/high_scale_benchmark.json
+  --real-grid --num-people 300000 --batch-size 25000 --edge-flow-detail fsa \
+  --max-seconds 600 --output-json docs/benchmarks/high_scale_benchmark_300000.json
 ```
 
-This path runs exact per-person weekly itinerary and SoC/charging decisions, but aggregates each batch before moving to the next batch. `--max-seconds 600` makes the under-10-minute requirement executable, and `--output-json` writes the benchmark payload for review. The batch summary records charge-energy and road-flow conservation totals, so high-scale runs can be audited without retaining raw people/leg tables. It is the production-scale path for FSA-corridor road-flow studies; full OSM edge expansion remains reserved for smaller final validation/visual inspection runs. The Streamlit dashboard uses the same FSA-corridor batched path above 25k sampled drivers, so high-scale UI runs avoid retaining millions of raw leg rows in memory.
+This path runs exact per-person weekly itinerary and SoC/charging decisions, but aggregates each batch before moving to the next batch. `--max-seconds 600` makes the under-10-minute requirement executable, and `--output-json` writes the benchmark payload for review. The committed 300k real-grid benchmark in `docs/benchmarks/high_scale_benchmark_300000.json` completed in `322.798s`. The batch summary records charge-energy and road-flow conservation totals, so high-scale runs can be audited without retaining raw people/leg tables. It is the production-scale path for FSA-corridor road-flow studies; full OSM edge expansion remains reserved for smaller final validation/visual inspection runs. The Streamlit dashboard uses the same FSA-corridor batched path above 25k sampled drivers, so high-scale UI runs avoid retaining millions of raw leg rows in memory.
 
 ## Tech Stack
 
