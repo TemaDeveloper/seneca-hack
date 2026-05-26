@@ -31,6 +31,7 @@ def test_scale_benchmark_writes_thresholded_evidence_json(tmp_path):
     assert payload["command_args"]["num_people"] == 80
     assert payload["command_args"]["output_json"] == str(output_path)
     assert isinstance(payload["git_commit"], str)
+    assert isinstance(payload["git_dirty"], bool)
     assert isinstance(payload["python_version"], str)
     assert isinstance(payload["platform"], str)
     assert payload["batches"] == 2

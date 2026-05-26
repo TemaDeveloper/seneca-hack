@@ -41,14 +41,28 @@ def _git_value(*args: str) -> str | None:
         )
     except (OSError, subprocess.CalledProcessError):
         return None
-    return result.stdout.strip() or None
+    return result.stdout.strip()
 
 
-def _git_dirty() -> bool | None:
+def _status_path(line: str) -> str:
+    path = line[3:]
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path
+
+
+def _git_dirty(ignore_path: Path | None = None) -> bool | None:
     status = _git_value("status", "--porcelain")
     if status is None:
         return None
-    return bool(status)
+    if not status:
+        return False
+    ignored = None if ignore_path is None else ignore_path.as_posix()
+    dirty_lines = [
+        line for line in status.splitlines()
+        if ignored is None or _status_path(line) != ignored
+    ]
+    return bool(dirty_lines)
 
 
 def _command_args_payload(args: argparse.Namespace) -> dict[str, object]:
@@ -85,7 +99,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         "benchmark_schema_version": 2,
         "command_args": _command_args_payload(args),
         "git_commit": _git_value("rev-parse", "--short", "HEAD"),
-        "git_dirty": _git_dirty(),
+        "git_dirty": _git_dirty(args.output_json),
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "machine": platform.machine(),
