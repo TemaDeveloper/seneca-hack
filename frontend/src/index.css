@@ -193,3 +193,13 @@ tr:hover {
   margin-bottom: 16px;
   align-items: flex-end;
 }
+
+.custom-tooltip {
+  background: var(--bg-panel);
+  border: 3px solid var(--border-color);
+  color: var(--text-main);
+  border-radius: 0;
+  padding: 8px;
+  box-shadow: 4px 4px 0px var(--border-color);
+}
+

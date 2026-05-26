@@ -1,8 +1,10 @@
-# Interactive Editor Implementation
+# Bug Fix: React Blank Screen & Map Rendering
 
 ## Plan
-- [x] Create `backend/apis/api.py` with mock data generation (fast, but uses real Folium maps).
-- [x] Add `/api/custom_placement` endpoint to `api.py`.
-- [x] Update `backend/map_builder.py` colors to Brutalist Style (Solid #FF0000 and #00FF00, black borders).
-- [x] Update `frontend/src/api.js` to add the custom placement call.
-- [x] Implement Editor UI in `frontend/src/App.jsx`.
+- [x] Add missing React states (`loading`, `simData`, `activeLayer`, `optData`, `customPlacements`, `newFsa`, `newType`, `newUnits`, `showCars`) in `App.jsx`.
+- [x] Correct JSX interpolation syntax (e.g. `${site.fsa}` -> `{site.fsa}`) in `MapComponent.jsx`.
+- [x] Add safety checks for `row.peak_ev_load_kw` calculations when drawing EV dots.
+- [x] Verify the application functions and renders successfully and the right-click details table shows EV details correctly.
+
+## Review
+-
