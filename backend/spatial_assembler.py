@@ -144,41 +144,40 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
             if feeders_gdf.crs.to_epsg() != 4326:
                 feeders_gdf = feeders_gdf.to_crs(epsg=4326)
             
-            # Convert kVA range strings to kW using midpoint and power factor
-            POWER_FACTOR = 0.9  # Typical distribution power factor
-
-            def kva_range_to_kw(val):
-                if pd.isna(val):
-                    return None
-                val_str = str(val).replace(",", "")
+            # Clean the Feeder_Capacity string (e.g., if it has units or commas)
+            def extract_kw(val):
+                if pd.isna(val): return None
+                val_str = str(val).lower().replace(",", "")
+                # Find all numbers (including decimals)
                 nums = re.findall(r'\d+(?:\.\d+)?', val_str)
-                if not nums:
-                    return None
-                nums = [float(n) for n in nums]
-                if len(nums) >= 2:
-                    # Range like "0-499" or "1,000-2,000" -> use midpoint
-                    midpoint_kva = (nums[0] + nums[1]) / 2
-                else:
-                    # Single number like "2,000+" -> use as minimum estimate
-                    midpoint_kva = nums[0]
-                # Convert kVA to kW
-                return midpoint_kva * POWER_FACTOR
-
-            feeders_gdf["real_capacity_kw"] = feeders_gdf["Feeder_Capacity"].apply(kva_range_to_kw)
+                if not nums: return None
+                
+                # If there's a range like "0-499", take the upper bound (the last number)
+                num = float(nums[-1])
+                
+                if 'mva' in val_str or 'mw' in val_str:
+                    return num * 1000
+                return num
+                    
+            feeders_gdf["real_capacity_kw"] = feeders_gdf["Feeder_Capacity"].apply(extract_kw)
             feeders_gdf = feeders_gdf.dropna(subset=["real_capacity_kw"])
-
-            # Spatial join: which feeders overlap which FSAs?
+            
+            # Spatial join: Which feeders overlap which FSAs?
+            # We use 'intersects' because feeders span across borders
             joined = gpd.sjoin(gdf, feeders_gdf, how="left", predicate="intersects")
-
-            # For each FSA, use the minimum overlapping feeder capacity (weakest link)
+            
+            # For each FSA, find the minimum overlapping feeder capacity (the weakest link)
             real_caps = joined.groupby("fsa")["real_capacity_kw"].min()
-            real_caps = real_caps[real_caps.notna() & (real_caps > 0)]
-
-            # Apply real capacities via map() to avoid index alignment bugs
-            mapped = gdf["fsa"].map(real_caps)
-            gdf["proxy_capacity_kw"] = mapped.fillna(gdf["proxy_capacity_kw"]).astype(int)
-
-            print(f"Applied real Toronto Hydro capacity to {len(real_caps)} FSAs.")
+            
+            # Only apply real capacities to FSAs inside Toronto (typically M-prefix, though some L might overlap)
+            mask = real_caps.notna() & (real_caps > 0)
+            
+            # Update the capacity
+            gdf.loc[gdf["fsa"].isin(real_caps[mask].index), "proxy_capacity_kw"] = real_caps[mask].values
+            
+            # Cast back to int
+            gdf["proxy_capacity_kw"] = gdf["proxy_capacity_kw"].astype(int)
+            print(f"Successfully applied real Toronto Hydro capacity limits to {mask.sum()} FSAs.")
         except Exception as e:
             print(f"[WARNING] Failed to process real Toronto Hydro data: {e}")
 
@@ -209,7 +208,7 @@ if __name__ == "__main__":
     print(f"\nCapacity distribution:")
     print(gdf.groupby("zone_type")["proxy_capacity_kw"].first().to_string())
     print(f"\nSample rows:")
-    print(gdf[["fsa", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"]].head(10).to_string())
+    print(gdf[["fsa", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"]].to_string())
     print(f"\nBounds:")
     bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
     print(f"  Lon: {bounds[0]:.4f} to {bounds[2]:.4f}")
