@@ -41,7 +41,7 @@ def _git_value(*args: str) -> str | None:
         )
     except (OSError, subprocess.CalledProcessError):
         return None
-    return result.stdout.strip()
+    return result.stdout.rstrip("\n")
 
 
 def _status_path(line: str) -> str:
