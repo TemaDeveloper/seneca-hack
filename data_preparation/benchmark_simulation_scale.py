@@ -53,6 +53,11 @@ def main() -> None:
         "hourly_rows": int(len(result["hourly"])),
         "grid_rows": int(len(result["grid_load"])),
         "edge_flow_rows": int(len(result["edge_flows"])),
+        "charge_energy_kwh": round(float(batches["charge_energy_kwh"].sum()), 3) if not batches.empty else 0.0,
+        "hourly_energy_kwh": round(float(result["hourly"]["energy_kwh"].sum()), 3) if not result["hourly"].empty else 0.0,
+        "edge_vehicle_count": round(float(result["edge_flows"]["vehicle_count"].sum()), 3) if not result["edge_flows"].empty else 0.0,
+        "edge_ev_count": round(float(result["edge_flows"]["ev_count"].sum()), 3) if not result["edge_flows"].empty else 0.0,
+        "edge_route_km": round(float(result["edge_flows"]["route_km"].sum()), 3) if not result["edge_flows"].empty else 0.0,
         "total_s": round(elapsed, 3),
         "people_per_second": round(args.num_people / elapsed, 1) if elapsed > 0 else None,
     }

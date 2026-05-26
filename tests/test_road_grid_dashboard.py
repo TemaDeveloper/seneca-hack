@@ -138,6 +138,18 @@ def test_weekly_dashboard_adapter_uses_batched_fsa_flow_for_large_runs():
     assert int(result.batch_summary["people"].sum()) == 700
     assert result.trip_leg_count == int(result.batch_summary["leg_rows"].sum())
     assert result.charge_event_count == int(result.batch_summary["charge_rows"].sum())
+    assert np.isclose(
+        result.batch_summary["hourly_energy_kwh"].sum(),
+        result.hourly["energy_kwh"].sum(),
+        rtol=0,
+        atol=1e-6,
+    )
+    assert np.isclose(
+        result.batch_summary["edge_route_km"].sum(),
+        result.edge_flows["route_km"].sum(),
+        rtol=0,
+        atol=1e-6,
+    )
     assert not result.grid_load.empty
     assert not result.edge_flows.empty
     assert len(result.peak_grid) == result.engine.base_gdf["fsa"].nunique()

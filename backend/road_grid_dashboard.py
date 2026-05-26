@@ -14,7 +14,7 @@ from typing import Literal
 
 import pandas as pd
 
-from mobility_simulator import MobilityConfig, MobilitySimulationEngine
+from mobility_simulator import BATCH_SUMMARY_COLUMNS, MobilityConfig, MobilitySimulationEngine
 
 
 TimeWindow = Literal["Full Week", "Full Day", "Morning", "Evening", "Weekend", "Weekday AM", "Weekday PM"]
@@ -125,7 +125,12 @@ def run_weekly_road_grid_simulation(
             "charge_rows": len(charges),
             "hourly_rows": len(hourly),
             "edge_flow_rows": len(edge_flows),
-        }])
+            "charge_energy_kwh": round(float(charges["energy_delivered_kwh"].sum()), 6) if not charges.empty else 0.0,
+            "hourly_energy_kwh": round(float(hourly["energy_kwh"].sum()), 6) if not hourly.empty else 0.0,
+            "edge_vehicle_count": round(float(edge_flows["vehicle_count"].sum()), 6) if not edge_flows.empty else 0.0,
+            "edge_ev_count": round(float(edge_flows["ev_count"].sum()), 6) if not edge_flows.empty else 0.0,
+            "edge_route_km": round(float(edge_flows["route_km"].sum()), 6) if not edge_flows.empty else 0.0,
+        }], columns=BATCH_SUMMARY_COLUMNS)
     peak_grid = summarize_peak_grid_by_fsa(grid_load, time_window=time_window)
     return RoadGridSimulationResult(
         engine=engine,

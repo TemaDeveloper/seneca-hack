@@ -246,6 +246,12 @@ EDGE_FLOW_COLUMNS = [
     "day", "hour", "edge_u", "edge_v", "fsa", "zone_type", "vehicle_count", "ev_count", "route_km",
 ]
 
+BATCH_SUMMARY_COLUMNS = [
+    "batch", "seed", "people", "itinerary_rows", "leg_rows", "charge_rows",
+    "hourly_rows", "edge_flow_rows", "charge_energy_kwh", "hourly_energy_kwh",
+    "edge_vehicle_count", "edge_ev_count", "edge_route_km",
+]
+
 GRID_LOAD_COLUMNS = [
     "fsa", "zone_type", "day", "hour", "proxy_capacity_kw",
     "baseline_load_kw", "ev_load_kw", "total_load_kw", "headroom_kw",
@@ -1033,7 +1039,7 @@ class MobilitySimulationEngine:
                 "hourly": empty_hourly,
                 "grid_load": self.aggregate_weekly_grid_load(empty_hourly),
                 "edge_flows": pd.DataFrame(columns=EDGE_FLOW_COLUMNS),
-                "batches": pd.DataFrame(columns=["batch", "seed", "people", "itinerary_rows", "leg_rows", "charge_rows", "hourly_rows", "edge_flow_rows"]),
+                "batches": pd.DataFrame(columns=BATCH_SUMMARY_COLUMNS),
             }
         if batch_size <= 0:
             raise ValueError("batch_size must be positive.")
@@ -1067,6 +1073,11 @@ class MobilitySimulationEngine:
                 "charge_rows": len(charges),
                 "hourly_rows": len(hourly),
                 "edge_flow_rows": len(edge_flows),
+                "charge_energy_kwh": round(float(charges["energy_delivered_kwh"].sum()), 6) if not charges.empty else 0.0,
+                "hourly_energy_kwh": round(float(hourly["energy_kwh"].sum()), 6) if not hourly.empty else 0.0,
+                "edge_vehicle_count": round(float(edge_flows["vehicle_count"].sum()), 6) if not edge_flows.empty else 0.0,
+                "edge_ev_count": round(float(edge_flows["ev_count"].sum()), 6) if not edge_flows.empty else 0.0,
+                "edge_route_km": round(float(edge_flows["route_km"].sum()), 6) if not edge_flows.empty else 0.0,
             })
 
         hourly_all = self._sum_hourly_parts(hourly_parts)
@@ -1075,7 +1086,7 @@ class MobilitySimulationEngine:
             "hourly": hourly_all,
             "grid_load": self.aggregate_weekly_grid_load(hourly_all),
             "edge_flows": edge_all,
-            "batches": pd.DataFrame(batch_rows),
+            "batches": pd.DataFrame(batch_rows, columns=BATCH_SUMMARY_COLUMNS),
         }
 
     @staticmethod

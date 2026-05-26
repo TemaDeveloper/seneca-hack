@@ -580,7 +580,13 @@ def test_weekly_hourly_aggregation_is_unique_and_energy_conserving():
 
 
 def test_batched_weekly_aggregation_matches_single_batch_outputs():
-    from mobility_simulator import EDGE_FLOW_COLUMNS, HOURLY_CHARGE_COLUMNS, MobilityConfig, MobilitySimulationEngine
+    from mobility_simulator import (
+        BATCH_SUMMARY_COLUMNS,
+        EDGE_FLOW_COLUMNS,
+        HOURLY_CHARGE_COLUMNS,
+        MobilityConfig,
+        MobilitySimulationEngine,
+    )
 
     engine = MobilitySimulationEngine(MobilityConfig(ev_probability=0.40, road_graph_source="fsa_adjacency", charger_source="zone_proxy"))
     people, itinerary = engine.generate_weekly_itinerary(num_people=180, seed=881)
@@ -606,6 +612,41 @@ def test_batched_weekly_aggregation_matches_single_batch_outputs():
         atol=1e-9,
     )
     assert int(batched["batches"]["people"].sum()) == 180
+    assert list(batched["batches"].columns) == BATCH_SUMMARY_COLUMNS
+    assert np.isclose(
+        batched["batches"]["charge_energy_kwh"].sum(),
+        batched["hourly"]["energy_kwh"].sum(),
+        rtol=0,
+        atol=1e-6,
+    )
+    assert np.isclose(
+        batched["batches"]["edge_route_km"].sum(),
+        batched["edge_flows"]["route_km"].sum(),
+        rtol=0,
+        atol=1e-6,
+    )
+
+
+def test_batched_weekly_aggregation_conserves_multi_batch_totals():
+    from mobility_simulator import MobilityConfig, MobilitySimulationEngine
+
+    engine = MobilitySimulationEngine(MobilityConfig(
+        ev_probability=0.65,
+        road_graph_source="fsa_adjacency",
+        charger_source="zone_proxy",
+    ))
+    batched = engine.run_weekly_batched_aggregation(num_people=720, seed=177, batch_size=250, edge_flow_detail="fsa")
+    batches = batched["batches"]
+
+    assert len(batches) == 3
+    assert int(batches["people"].sum()) == 720
+    assert int(batches["hourly_rows"].sum()) >= len(batched["hourly"])
+    assert int(batches["edge_flow_rows"].sum()) >= len(batched["edge_flows"])
+    assert np.isclose(batches["charge_energy_kwh"].sum(), batches["hourly_energy_kwh"].sum(), rtol=0, atol=1e-6)
+    assert np.isclose(batches["hourly_energy_kwh"].sum(), batched["hourly"]["energy_kwh"].sum(), rtol=0, atol=1e-6)
+    assert np.isclose(batches["edge_vehicle_count"].sum(), batched["edge_flows"]["vehicle_count"].sum(), rtol=0, atol=1e-6)
+    assert np.isclose(batches["edge_ev_count"].sum(), batched["edge_flows"]["ev_count"].sum(), rtol=0, atol=1e-6)
+    assert np.isclose(batches["edge_route_km"].sum(), batched["edge_flows"]["route_km"].sum(), rtol=0, atol=1e-6)
 
 
 def test_validation_catches_charge_event_accounting_breaks():
