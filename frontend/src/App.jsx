@@ -20,12 +20,16 @@ function App() {
   const [newType, setNewType] = useState('DC Fast Charging Array');
   const [newUnits, setNewUnits] = useState(1);
   const [showCars, setShowCars] = useState(false);
+  const [simVersion, setSimVersion] = useState(0);
+  const [error, setError] = useState(null);
 
   const handleRunSimulation = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await runSimulation(params);
       setSimData(data);
+      setSimVersion(v => v + 1);
       // If they already optimized, changing params resets it for now to avoid stale data
       if (activeLayer === 'placements' && optData) {
         setActiveLayer('demand');
@@ -34,6 +38,7 @@ function App() {
       setCustomPlacements([]);
     } catch (e) {
       console.error(e);
+      setError('Simulation failed. Is the backend running on port 8000?');
     }
     setLoading(false);
   };
@@ -45,6 +50,7 @@ function App() {
 
   const handleOptimize = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await runOptimization(params);
       setOptData(data);
@@ -56,7 +62,7 @@ function App() {
       setActiveLayer('placements');
     } catch (e) {
       console.error(e);
-      alert('Optimization failed');
+      setError('Optimization failed. Check the backend console for details.');
     }
     setLoading(false);
   };
@@ -65,8 +71,11 @@ function App() {
     if (!newFsa) return;
     const existing = customPlacements.findIndex(p => p.fsa === newFsa);
     if (existing >= 0) {
-      const updated = [...customPlacements];
-      updated[existing].charger_units += newUnits;
+      const updated = customPlacements.map((p, i) =>
+        i === existing
+          ? { ...p, charger_units: p.charger_units + newUnits }
+          : p
+      );
       setCustomPlacements(updated);
     } else {
       setCustomPlacements([...customPlacements, { fsa: newFsa, charger_type: newType, charger_units: newUnits }]);
@@ -80,20 +89,28 @@ function App() {
 
   const handleApplyCustom = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await runCustomPlacement(params, customPlacements);
       setOptData(data);
       setActiveLayer('placements');
     } catch (e) {
       console.error(e);
-      alert('Custom placement failed');
+      setError('Custom placement failed. Check the backend console for details.');
     }
     setLoading(false);
   };
 
   return (
     <div className="dashboard-container">
-      {loading && <div className="loading-overlay">Syncing...</div>}
+      {loading && (
+        <div className="loading-overlay">
+          <div className="loading-content">
+            <div className="loading-spinner" />
+            <span>Running simulation…</span>
+          </div>
+        </div>
+      )}
 
       <div className="sidebar">
         <h2>Simulation Controls</h2>
@@ -154,7 +171,14 @@ function App() {
         <h1>EV Grid Planner</h1>
         <p>Real-time Native React Map Engine</p>
 
-        {!simData && (
+        {error && (
+          <div className="error-banner">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} style={{ padding: '4px 12px', fontSize: '0.8rem', boxShadow: 'none', border: '2px solid currentColor' }}>✕</button>
+          </div>
+        )}
+
+        {!simData && !error && (
           <div className="glass-panel">
             <h3>Loading initial simulation state...</h3>
           </div>
@@ -220,6 +244,7 @@ function App() {
                 layer={activeLayer}
                 prescriptions={optData ? optData.prescriptions : null}
                 showCars={showCars}
+                simVersion={simVersion}
               />
             </div>
           </>

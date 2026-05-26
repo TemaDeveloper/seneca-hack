@@ -26,7 +26,7 @@ function pseudoRandom(seed) {
   return x - Math.floor(x);
 }
 
-export default function MapComponent({ gridData, evData, layer, prescriptions, showCars }) {
+export default function MapComponent({ gridData, evData, layer, prescriptions, showCars, simVersion }) {
   const [geoJsonData, setGeoJsonData] = useState(null);
 
   useEffect(() => {
@@ -155,7 +155,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
       />
 
       <GeoJSON
-        key={layer + (gridData ? gridData.length : 0) + showCars.toString()}
+        key={layer + simVersion + showCars.toString()}
         data={geoJsonData}
         style={getStyle}
         onEachFeature={onEachFeature}

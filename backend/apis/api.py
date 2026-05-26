@@ -42,9 +42,24 @@ class CustomPlacements(SimParams):
 def _generate_mock_grid(params: SimParams):
     grid_df = base_grid.copy()
     scale_factor = params.num_cars / 30000.0
-    
-    # Deterministic pseudo-random load based on fsa length/hash
-    grid_df["peak_ev_load_kw"] = (grid_df["proxy_capacity_kw"] * 0.4 * scale_factor).round(1)
+
+    # Temperature effect: cold weather increases charging demand (battery efficiency loss)
+    # At 20C (optimal) → multiplier = 1.0. At -20C → multiplier ≈ 1.34 (34% more energy needed)
+    temp_multiplier = 1.0
+    if params.temperature < 20:
+        temp_diff = 20 - params.temperature
+        efficiency_loss = min(0.40, temp_diff * 0.0085)
+        temp_multiplier = 1.0 / (1.0 - efficiency_loss)
+
+    # Time-of-day effect: evening peak (17-20) has highest load, overnight (0-5) has lowest
+    # Uses a simple bell curve centered on hour 17.5
+    import math
+    hour = params.time_of_day
+    time_multiplier = 0.3 + 0.7 * math.exp(-0.5 * ((hour - 17.5) / 3.0) ** 2)
+
+    combined_scale = scale_factor * temp_multiplier * time_multiplier
+
+    grid_df["peak_ev_load_kw"] = (grid_df["proxy_capacity_kw"] * 0.4 * combined_scale).round(1)
     grid_df["baseline_load_kw"] = grid_df["proxy_capacity_kw"] * 0.6
     
     grid_df["total_load_kw"] = grid_df["peak_ev_load_kw"] + grid_df["baseline_load_kw"]
