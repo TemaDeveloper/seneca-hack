@@ -41,7 +41,7 @@ def build_demand_heatmap(gdf: gpd.GeoDataFrame, grid_df: pd.DataFrame) -> folium
         max_load = 1
 
     colormap = cm.LinearColormap(
-        colors=["#FFFF00", "#FF8C00", "#FF0000"],
+        colors=["#00FF00", "#FF0000"],
         vmin=0,
         vmax=max_load,
         caption="Peak EV Charging Load (kW)"
@@ -50,10 +50,10 @@ def build_demand_heatmap(gdf: gpd.GeoDataFrame, grid_df: pd.DataFrame) -> folium
     def style_fn(feature):
         load = feature["properties"].get("peak_ev_load_kw", 0)
         return {
-            "fillColor": colormap(load) if load else "#333333",
-            "color": "#555555",
-            "weight": 0.5,
-            "fillOpacity": 0.7,
+            "fillColor": colormap(load) if load else "#FFFFFF",
+            "color": "#000000",
+            "weight": 2,
+            "fillOpacity": 1.0,
         }
 
     folium.GeoJson(
@@ -80,10 +80,10 @@ def build_vulnerability_map(gdf: gpd.GeoDataFrame, grid_df: pd.DataFrame) -> fol
     def style_fn(feature):
         overloaded = feature["properties"].get("overloaded", False)
         return {
-            "fillColor": "#DC143C" if overloaded else "#2ECC40",
-            "color": "#555555",
-            "weight": 0.5,
-            "fillOpacity": 0.7,
+            "fillColor": "#FF0000" if overloaded else "#00FF00",
+            "color": "#000000",
+            "weight": 2,
+            "fillOpacity": 1.0,
         }
 
     folium.GeoJson(
