@@ -1,7 +1,7 @@
 """
 EV Charging Demand & Grid Planning — Interactive Dashboard
 
-Streamlit entry point. Run with: streamlit run app.py
+Streamlit entry point. Run with: uv run streamlit run app.py
 """
 
 import sys
@@ -14,8 +14,8 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from spatial_assembler import load_enriched_geodataframe
-from monte_carlo import SimulationEngine
 from optimizer import optimize_placement
+from road_grid_dashboard import run_weekly_road_grid_simulation
 from map_builder import (
     build_demand_heatmap,
     build_vulnerability_map,
@@ -26,7 +26,8 @@ from map_builder import (
 # Constants
 # ---------------------------------------------------------------------------
 GTA_BASE_FLEET = 3_000_000  # Registered vehicles in GTA
-MAX_SAMPLED_EVS = 30_000    # Cap for simulation performance
+DEFAULT_SAMPLED_DRIVERS = 2_500
+MAX_SAMPLED_DRIVERS = 10_000
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -43,10 +44,6 @@ st.set_page_config(
 @st.cache_data
 def load_gdf():
     return load_enriched_geodataframe()
-
-@st.cache_resource
-def get_engine():
-    return SimulationEngine()
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -67,9 +64,15 @@ temperature = st.sidebar.slider(
 )
 
 time_of_day = st.sidebar.selectbox(
-    "Time of Day",
-    options=["Full Day", "Morning", "Evening"],
+    "Time Window",
+    options=["Full Week", "Morning", "Evening", "Weekend"],
     index=0,
+)
+
+sampled_drivers = st.sidebar.slider(
+    "Sampled Drivers",
+    min_value=500, max_value=MAX_SAMPLED_DRIVERS, value=DEFAULT_SAMPLED_DRIVERS, step=500,
+    help="Weekly agent sample size. Results are scaled to the represented GTA vehicle fleet."
 )
 
 max_stations = st.sidebar.slider(
@@ -80,11 +83,10 @@ max_stations = st.sidebar.slider(
 
 # Compute fleet size
 raw_fleet = int(GTA_BASE_FLEET * adoption_pct / 100)
-num_evs = min(raw_fleet, MAX_SAMPLED_EVS)
-scale_factor = raw_fleet / num_evs
+scale_factor = GTA_BASE_FLEET / sampled_drivers
 
 st.sidebar.markdown(f"**Fleet size:** {raw_fleet:,} EVs")
-st.sidebar.markdown(f"**Sampling:** {num_evs:,} simulated, results scaled {scale_factor:.1f}x")
+st.sidebar.markdown(f"**Sampling:** {sampled_drivers:,} drivers, load scaled {scale_factor:.1f}x")
 st.sidebar.markdown("---")
 
 run_sim = st.sidebar.button("Run Simulation", type="primary", use_container_width=True)
@@ -97,26 +99,32 @@ run_opt = st.sidebar.button(
 # ---------------------------------------------------------------------------
 # Simulation logic
 # ---------------------------------------------------------------------------
-engine = get_engine()
 gdf = load_gdf()
 
 if run_sim:
-    with st.spinner("Running Monte Carlo simulation..."):
-        ev_df = engine.run_simulation(
-            num_evs=num_evs,
-            time_of_day=time_of_day,
+    with st.spinner("Running weekly road-grid simulation..."):
+        result = run_weekly_road_grid_simulation(
+            num_people=sampled_drivers,
+            ev_probability=adoption_pct / 100.0,
             temperature_celsius=float(temperature),
+            grid_ev_load_scale=scale_factor,
+            time_window=time_of_day,
+            seed=42,
+            require_real_grid=True,
         )
-        grid_df = engine.aggregate_grid_load(ev_df)
-
-        # Scale peak_ev_load_kw by the scale factor for display accuracy
-        grid_df["peak_ev_load_kw"] = (grid_df["peak_ev_load_kw"] * scale_factor).round(1)
-        grid_df["total_load_kw"] = (grid_df["peak_ev_load_kw"] + grid_df["baseline_load_kw"]).round(1)
-        grid_df["overloaded"] = grid_df["total_load_kw"] > grid_df["proxy_capacity_kw"]
-        grid_df["deficit_kw"] = (grid_df["total_load_kw"] - grid_df["proxy_capacity_kw"]).clip(lower=0).round(1)
+        grid_df = result.peak_grid.copy()
 
         st.session_state["grid_df"] = grid_df
         st.session_state["ev_count"] = raw_fleet
+        st.session_state["simulation_summary"] = {
+            "road_source": result.engine.road_network.summary().source,
+            "road_nodes": result.engine.road_network.summary().node_count,
+            "road_edges": result.engine.road_network.summary().edge_count,
+            "chargers": len(result.engine.charger_catalog.public),
+            "trip_legs": len(result.legs),
+            "charge_events": len(result.charges),
+            "edge_flow_rows": len(result.edge_flows),
+        }
         # Clear old optimizer results
         st.session_state.pop("optimizer_df", None)
 
@@ -146,8 +154,17 @@ st.header("1. Where EV Charging Demand Concentrates")
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total EVs", f"{ev_count:,}")
-col2.metric("Total Peak Demand", f"{grid_df['peak_ev_load_kw'].sum() / 1000:.1f} MW")
+col2.metric("Sum of FSA Peaks", f"{grid_df['peak_ev_load_kw'].sum() / 1000:.1f} MW")
 col3.metric("Temperature", f"{temperature}°C")
+
+summary = st.session_state.get("simulation_summary", {})
+if summary:
+    st.caption(
+        f"Road grid: {summary['road_source']} "
+        f"({summary['road_nodes']:,} nodes / {summary['road_edges']:,} edges), "
+        f"public chargers: {summary['chargers']:,}, "
+        f"legs: {summary['trip_legs']:,}, edge-flow rows: {summary['edge_flow_rows']:,}"
+    )
 
 m1 = build_demand_heatmap(gdf, grid_df)
 st_folium(m1, use_container_width=True, height=500, returned_objects=[])

@@ -20,7 +20,11 @@ def test_capacity_map_has_five_zone_types():
 def test_load_enriched_geodataframe_returns_expected_columns():
     """The enriched GeoDataFrame must have all required columns."""
     gdf = load_enriched_geodataframe()
-    required = {"fsa", "geometry", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"}
+    required = {
+        "fsa", "geometry", "zone_type", "proxy_capacity_kw",
+        "population_2021", "total_private_dwellings_2021", "occupied_private_dwellings_2021",
+        "centroid_lat", "centroid_lon",
+    }
     assert required.issubset(set(gdf.columns))
 
 
@@ -48,3 +52,10 @@ def test_all_zone_types_have_capacity():
     """Every zone_type in the data must map to a capacity value."""
     gdf = load_enriched_geodataframe()
     assert gdf["proxy_capacity_kw"].isna().sum() == 0
+
+
+def test_population_counts_join_when_available():
+    """StatCan FSA counts should join onto the GTA FSA table when present."""
+    gdf = load_enriched_geodataframe()
+    if gdf["population_2021"].notna().any():
+        assert gdf["population_2021"].fillna(0).sum() > 0

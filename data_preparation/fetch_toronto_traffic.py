@@ -13,6 +13,7 @@ from spatial_assembler import load_enriched_geodataframe
 # ---------------------------------------------------------------------------
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "backend", "data")
 OUTPUT_JSON = os.path.join(DATA_DIR, "zone_weights.json")
+OUTPUT_FSA_CSV = os.path.join(DATA_DIR, "toronto_traffic_fsa_counts.csv")
 
 # Toronto Open Data CSV Download URL
 DATASET_URL = "https://ckan0.cf.opendata.inter.prod-toronto.ca/datastore/dump/6afa3b1f-f6a5-4235-8bd6-7568411c19f4"
@@ -44,6 +45,15 @@ def fetch_and_calculate_zone_weights():
     
     # 5. Aggregate Volumes by ZONE TYPE
     print("Calculating exact traffic volumes for each zone type...")
+    fsa_counts = joined_gdf.groupby(["fsa", "zone_type"], as_index=False).agg(
+        am_peak_vehicle=("am_peak_vehicle", "sum"),
+        pm_peak_vehicle=("pm_peak_vehicle", "sum"),
+        total_vehicle=("total_vehicle", "sum"),
+        count_points=("_id", "count"),
+    )
+    fsa_counts["source"] = "toronto_open_data_intersection_counts"
+    fsa_counts.to_csv(OUTPUT_FSA_CSV, index=False)
+
     zone_volumes = joined_gdf.groupby("zone_type").agg({
         "am_peak_vehicle": "sum",
         "pm_peak_vehicle": "sum"
@@ -87,6 +97,7 @@ def fetch_and_calculate_zone_weights():
         json.dump(weights_dict, f, indent=4)
         
     print(f"[OK] Successfully saved mathematical zone weights to {OUTPUT_JSON}")
+    print(f"[OK] Successfully saved FSA traffic counts to {OUTPUT_FSA_CSV}")
     print("============================================================")
 
 if __name__ == "__main__":

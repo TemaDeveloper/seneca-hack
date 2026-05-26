@@ -366,7 +366,7 @@ While `streamlit-folium` renders Leaflet maps well, **any map interaction** (cli
 1. **Data integrity:** GeoDataFrame has expected columns, CRS is EPSG:4326, no null geometries, ~150 FSA polygons loaded
 2. **Monte Carlo sanity:** Total simulated vehicles matches expected count, all assigned FSAs exist in boundary set, peak loads are positive and within reasonable bounds (0–10,000 kW range)
 3. **Optimizer validation:** Number of selected stations ≤ `max_stations`, all selected sites are in overloaded FSAs, PuLP returns "Optimal" solve status
-4. **UI verification:** Run `streamlit run app.py` locally — all 3 views render, sidebar controls are wired, maps display correctly
+4. **UI verification:** Run `uv run streamlit run app.py` locally — all 3 views render, sidebar controls are wired, maps display correctly
 
 ### Visual Checks
 

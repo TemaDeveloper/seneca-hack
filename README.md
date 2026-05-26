@@ -20,8 +20,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env
 uv sync
 
-# Run the app
-streamlit run app.py
+# Run the app through the pinned Python environment
+uv run streamlit run app.py
 ```
 
 Opens at `http://localhost:8501`. Use the sidebar to adjust EV adoption rate, temperature, and station budget, then click **Run Simulation**.
@@ -40,17 +40,18 @@ Loads 260 GTA postal code (FSA) boundaries from Statistics Canada, classifies ea
 | Retail Hub | 1,500 kW | Shopping centers |
 | Transit Hub | 3,000 kW | Airports |
 
-### Phase 2: Monte Carlo Simulation (`backend/monte_carlo.py`)
+### Phase 2: Weekly Road-Grid Mobility Simulation (`backend/mobility_simulator.py`)
 
-Simulates up to 30,000 individual EVs using probability distributions derived from real City of Toronto traffic data:
+Builds a Monday-Sunday agent itinerary, routes every leg on the road graph, and patches charging decisions from SoC, future trip need, dwell time, charger access, and charger proximity:
 
-- **Spatial PDF** — zone weights from Toronto Open Data traffic intersection volumes
-- **Temporal PDF** — Full Day mixture model: 70% evening peak N(17.5, 1.5) + 30% midday peak N(12.0, 2.0)
-- **Battery deficiency** — Gamma(3, 5) + 5 kWh base, with winter efficiency penalty
-- **Duration-aware load model** — charging time = `soc_needed / charger_kw`. Only vehicles actively charging during each hour count toward grid load
-- **Grid inequality test** — `EV load + IESO baseline > feeder capacity` flags overloaded zones
+- **Real road graph** — cached OSM drive graph for GTA FSAs: routes, travel time, route paths, and edge-flow aggregation
+- **Hackathon data mapping** — FSA polygons, zone types, grid proxy capacity, population weights, and Toronto traffic counts are mapped onto the road graph
+- **Public chargers** — AFDC public EV chargers are mapped into FSAs and snapped to OSM road nodes
+- **Time conditioning** — weekday/weekend, day-of-week, commute arrival targets, dwell windows, and static time-of-day traffic multipliers
+- **SoC model** — weekly SoC propagation, home/work/public charging probabilities, deterministic reserve protection, and patch charging without failed trips
+- **Grid load** — charge sessions aggregate to FSA/day/hour load, then compare against explicit baseline headroom
 
-Winter mode: at -15C, batteries need ~42% more energy, producing longer charging sessions and higher concurrent grid stress.
+`backend/monte_carlo.py` remains as the legacy Phase 2 baseline and constant source for older tests.
 
 ### Phase 3: Optimization Solver (`backend/optimizer.py`)
 
@@ -64,9 +65,9 @@ PuLP mixed-integer linear programming solver for the Facility Location Problem:
 
 ### Phase 4: Interactive Dashboard (`app.py`)
 
-Streamlit + Folium web app with:
+Streamlit + Folium web app backed by `backend/road_grid_dashboard.py`, which calls the weekly OSM/AFDC road-grid model:
 
-- **Sidebar:** EV adoption slider (10-50%), temperature (-20 to +30C), time of day, station budget
+- **Sidebar:** EV adoption slider (10-50%), temperature (-20 to +30C), time window, sampled drivers, station budget
 - **View 1:** Yellow-to-red choropleth of peak EV charging load
 - **View 2:** Binary green/red grid vulnerability map
 - **View 3:** Purple marker pins at optimal sites with prescription popup cards
@@ -79,21 +80,30 @@ seneca-hack/
 ├── .streamlit/config.toml          # Dark theme config
 ├── backend/
 │   ├── spatial_assembler.py        # Phase 1 — GeoJSON + zone classification + capacity
-│   ├── monte_carlo.py              # Phase 2 — Monte Carlo simulation + grid test
+│   ├── mobility_simulator.py       # Phase 2 — weekly agent model over road-grid routes
+│   ├── road_network.py             # OSM/FSA road graph routing and edge mapping
+│   ├── charger_catalog.py          # AFDC/OSM/proxy charger catalog and road-node snapping
+│   ├── road_grid_dashboard.py      # App/runtime adapter for weekly road-grid outputs
+│   ├── simulation_validation.py    # Real-grid sanity and observed-target validation gates
+│   ├── monte_carlo.py              # Legacy Phase 2 baseline
 │   ├── optimizer.py                # Phase 3 — PuLP FLP solver + prescriptions
 │   ├── map_builder.py              # Phase 4 — Folium map construction
 │   └── data/
 │       ├── gta_fsa_boundaries.geojson
 │       ├── fsa_zone_classification.csv
 │       ├── ieso_load_profile.csv
-│       └── zone_weights.json
+│       ├── zone_weights.json
+│       ├── fsa_population_scaling.csv
+│       └── cache/
+│           ├── gta_drive.graphml
+│           ├── gta_drive_graph.pkl
+│           └── afdc_on_ev_chargers.csv
 ├── data_preparation/
 │   ├── prepare_data.py             # Downloads StatsCan boundaries + ArcGIS classification
-│   └── fetch_toronto_traffic.py    # Fetches Toronto Open Data traffic volumes
-├── tests/
-│   ├── test_spatial_assembler.py   # 6 tests
-│   ├── test_monte_carlo.py         # 8 tests
-│   └── test_optimizer.py           # 7 tests
+│   ├── fetch_real_world_grid.py    # Fetches/caches OSM road graph and chargers
+│   ├── fetch_toronto_traffic.py    # Fetches Toronto Open Data traffic volumes
+│   └── run_model_validation.py     # Real-grid validation and calibration CLI
+├── tests/                          # 82 tests, including road-grid integration tests
 └── docs/
     ├── blueprint.md
     ├── architecture.md
@@ -105,21 +115,35 @@ seneca-hack/
 | Source | Data | Usage |
 |--------|------|-------|
 | Statistics Canada | 2021 Census FSA boundary polygons | GTA map (260 postal zones) |
+| Statistics Canada | 2021 FSA population/dwellings | Home-origin and population scaling weights |
 | ArcGIS Living Atlas | Reverse geocode POI classification | Zone type per FSA |
 | City of Toronto Open Data | Traffic volumes at intersections | Spatial probability weights |
+| OpenStreetMap | GTA drive road graph | Route distance, travel time, and edge-flow mapping |
+| AFDC/NREL | Ontario public EV chargers | Public charger locations snapped to road graph |
 | IESO | Ontario hourly load profile | Baseline grid stress curve |
 
 ## Running Tests
 
 ```bash
-uv run pytest tests/ -v
+PYTHONPATH=backend uv run pytest -q
+
+PYTHONPATH=backend uv run python data_preparation/run_model_validation.py \
+  --real-grid --observed-targets --repeat-week --num-people 500 --seeds 101 202 303 --sensitivity
+
+PYTHONPATH=backend uv run python data_preparation/run_model_validation.py \
+  --real-grid --observed-targets --num-people 500 --seeds 101 202 303 \
+  --fit --fit-strategy adaptive --all-candidates \
+  --fit-num-people 250 --fit-seeds 101 202 \
+  --adaptive-stage1-people 120 --adaptive-stage2-top 32 \
+  --adaptive-final-top 8 --fit-jobs 4 \
+  --out-dir backend/data/validation/adaptive_fit --resume-fit
 ```
 
-21 tests covering spatial data integrity, simulation correctness, grid inequality logic, optimizer constraints, and winter temperature effects.
+89 tests cover spatial data integrity, hackathon-data-to-road-grid mapping, real OSM graph routing, AFDC charger snapping, public charge-event-to-catalog membership, private charge-event-to-origin mapping, edge-flow artifact integrity, cache fingerprinting, validation run metadata, charger concentration, purpose-zone alignment, weekly mobility, arrive-by timing, SoC/charging behavior, charge-event accounting, hourly load conservation, optimizer constraints, and dashboard runtime adaptation. The real-grid validation command requires the cached OSM graph and AFDC charger catalog, and sensitivity checks aggregate across supplied seeds. Validation runs with `--out-dir` write `run_metadata.json` with command args, runtime, config, seeds, artifact row counts, validation break counts, fit/sensitivity summaries, and cache-file metadata. The first OSM load writes a binary graph cache so later real-grid runs avoid repeatedly parsing the large GraphML file; expanded OD edge templates are also persisted after full edge aggregation. Route and edge-template caches carry FSA/centroid/graph-anchor fingerprints and are written atomically so parallel validation cannot leave partial cache files. Charging simulation and full OSM edge aggregation avoid pandas row churn in their hot loops; FSA-corridor flow remains the faster calibration proxy. The local machine has 4 performance CPU cores; `--fit-jobs 4` is the practical default. Validation multiprocessing uses normal spawned workers only from script entrypoints, with stdin/ad-hoc runs falling back to serial to avoid macOS native-library fork crashes. GPU acceleration is not currently useful without rewriting the Python agent loop into vectorized kernels. Long fit screens checkpoint candidate rows and can be resumed with `--resume-fit`; adaptive checkpoint filenames include stage size/seeds/detail to avoid mixing incompatible reruns.
 
 ## Tech Stack
 
-Python 3.14 | Streamlit | Folium | GeoPandas | NumPy | Pandas | PuLP | streamlit-folium
+Python 3.13 | Streamlit | Folium | GeoPandas | NumPy | Pandas | PuLP | streamlit-folium
 
 ## Team
 

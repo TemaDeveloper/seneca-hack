@@ -107,10 +107,16 @@ def optimize_placement(grid_df: pd.DataFrame, max_stations: int = 10) -> pd.Data
     for i in range(n):
         prob += pulp.lpSum(x[i][j] for j in range(n)) <= 1
 
-    # 5. Solve
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    # 5. Solve. Some local Apple Silicon environments install an x86 CBC
+    # binary with PuLP; fall back to deterministic greedy selection if CBC
+    # cannot execute.
+    try:
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+        solved = prob.status == pulp.constants.LpStatusOptimal
+    except OSError:
+        solved = False
 
-    if prob.status != pulp.constants.LpStatusOptimal:
+    if not solved:
         # Fallback: greedy — pick top N by deficit
         selected_indices = candidates.nlargest(effective_budget, "deficit_kw").index.tolist()
     else:

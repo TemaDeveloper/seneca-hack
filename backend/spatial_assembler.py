@@ -11,6 +11,7 @@ Public API:
             geometry       — Shapely polygon (EPSG:4326)
             zone_type      — "residential" | "leisure" | "office_park" | "retail_hub" | "transit_hub"
             proxy_capacity_kw — grid headroom ceiling in kW
+            population_2021 — optional StatCan FSA population count
             centroid_lat   — polygon centroid latitude
             centroid_lon   — polygon centroid longitude
 """
@@ -27,6 +28,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 FSA_GEOJSON = os.path.join(DATA_DIR, "gta_fsa_boundaries.geojson")
 ZONE_CSV = os.path.join(DATA_DIR, "fsa_zone_classification.csv")
+FSA_POPULATION_CSV = os.path.join(DATA_DIR, "fsa_population_scaling.csv")
 
 # Proxy grid headroom by zone type (kW)
 # Mirrors real-world transformer capacity differences across urban zones
@@ -91,6 +93,29 @@ def _load_zone_classification() -> pd.DataFrame:
     return df
 
 
+def _load_fsa_population() -> pd.DataFrame:
+    """Load optional FSA population/dwelling counts."""
+    if not os.path.exists(FSA_POPULATION_CSV):
+        return pd.DataFrame(columns=[
+            "fsa",
+            "population_2021",
+            "total_private_dwellings_2021",
+            "occupied_private_dwellings_2021",
+        ])
+
+    df = pd.read_csv(FSA_POPULATION_CSV)
+    expected = {
+        "fsa",
+        "population_2021",
+        "total_private_dwellings_2021",
+        "occupied_private_dwellings_2021",
+    }
+    missing = expected - set(df.columns)
+    if missing:
+        raise ValueError(f"Population CSV missing columns: {sorted(missing)}")
+    return df[list(expected)]
+
+
 def load_enriched_geodataframe() -> gpd.GeoDataFrame:
     """
     Build the enriched GeoDataFrame for downstream phases.
@@ -99,12 +124,14 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
         1. Load FSA boundary polygons (EPSG:4326)
         2. Join zone classification (residential / leisure / office_park / retail_hub / transit_hub)
         3. Assign proxy grid capacity headroom per zone type
-        4. Compute polygon centroids for marker placement
+        4. Join optional StatCan FSA population/dwelling counts
+        5. Compute polygon centroids for marker placement
 
     Returns:
         GeoDataFrame with columns:
             fsa, geometry, zone_type, proxy_capacity_kw,
-            centroid_lat, centroid_lon
+            population_2021, total_private_dwellings_2021,
+            occupied_private_dwellings_2021, centroid_lat, centroid_lon
     """
     # Step 1: Load boundaries
     gdf = _load_fsa_boundaries()
@@ -127,6 +154,14 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
     # Step 3: Assign proxy capacity
     gdf["proxy_capacity_kw"] = gdf["zone_type"].map(CAPACITY_MAP)
 
+    # Step 4: Join optional population/dwelling counts for expansion weights.
+    population = _load_fsa_population()
+    if not population.empty:
+        gdf = gdf.merge(population, on="fsa", how="left")
+    for col in ["population_2021", "total_private_dwellings_2021", "occupied_private_dwellings_2021"]:
+        if col not in gdf:
+            gdf[col] = pd.NA
+
     # Safety check — any unmapped zone types get residential capacity
     unmapped = gdf["proxy_capacity_kw"].isna().sum()
     if unmapped > 0:
@@ -135,7 +170,7 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
 
     gdf["proxy_capacity_kw"] = gdf["proxy_capacity_kw"].astype(int)
 
-    # Step 4: Compute centroids (for marker placement in later phases)
+    # Step 5: Compute centroids (for marker placement in later phases)
     # Project to UTM 17N for accurate centroid, then extract lat/lon
     gdf_projected = gdf.to_crs(epsg=32617)
     centroids_projected = gdf_projected["geometry"].centroid
