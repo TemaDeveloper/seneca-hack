@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 from pathlib import Path
+import subprocess
 import time
 
 from mobility_simulator import MobilityConfig, MobilitySimulationEngine
@@ -27,6 +29,39 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-seconds", type=float, default=None, help="Fail if total runtime exceeds this threshold.")
     parser.add_argument("--output-json", type=Path, default=None, help="Optional path for the benchmark JSON payload.")
     return parser
+
+
+def _git_value(*args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def _git_dirty() -> bool | None:
+    status = _git_value("status", "--porcelain")
+    if status is None:
+        return None
+    return bool(status)
+
+
+def _command_args_payload(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "num_people": int(args.num_people),
+        "batch_size": int(args.batch_size),
+        "seed": int(args.seed),
+        "ev_probability": float(args.ev_probability),
+        "real_grid": bool(args.real_grid),
+        "edge_flow_detail": str(args.edge_flow_detail),
+        "max_seconds": None if args.max_seconds is None else float(args.max_seconds),
+        "output_json": None if args.output_json is None else str(args.output_json),
+    }
 
 
 def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
@@ -47,8 +82,17 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
     batches = result["batches"]
     max_seconds = None if args.max_seconds is None else float(args.max_seconds)
     payload = {
+        "benchmark_schema_version": 2,
+        "command_args": _command_args_payload(args),
+        "git_commit": _git_value("rev-parse", "--short", "HEAD"),
+        "git_dirty": _git_dirty(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "machine": platform.machine(),
         "num_people": int(args.num_people),
         "batch_size": int(args.batch_size),
+        "seed": int(args.seed),
+        "ev_probability": float(args.ev_probability),
         "edge_flow_detail": args.edge_flow_detail,
         "road_graph_source": engine.road_network.summary().source,
         "charger_count": int(len(engine.charger_catalog.public)),

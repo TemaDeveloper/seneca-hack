@@ -27,6 +27,12 @@ def test_scale_benchmark_writes_thresholded_evidence_json(tmp_path):
 
     assert saved == payload
     assert payload["num_people"] == 80
+    assert payload["benchmark_schema_version"] == 2
+    assert payload["command_args"]["num_people"] == 80
+    assert payload["command_args"]["output_json"] == str(output_path)
+    assert isinstance(payload["git_commit"], str)
+    assert isinstance(payload["python_version"], str)
+    assert isinstance(payload["platform"], str)
     assert payload["batches"] == 2
     assert payload["passed_max_seconds"] is True
     assert payload["charge_energy_kwh"] == payload["hourly_energy_kwh"]
