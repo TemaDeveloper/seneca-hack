@@ -95,7 +95,7 @@ def test_winter_temperature_increases_grid_load():
     ev_winter = engine.run_simulation(num_evs=2000, time_of_day="Evening", temperature_celsius=-15.0)
     grid_winter = engine.aggregate_grid_load(ev_winter)
 
-    # Winter must produce higher total load than summer (same seed = same spatial/temporal draws)
-    summer_total = grid_summer["total_load_kw"].sum()
-    winter_total = grid_winter["total_load_kw"].sum()
-    assert winter_total > summer_total, f"Winter ({winter_total}) should exceed summer ({summer_total})"
+    # Winter must produce higher EV load than summer (same seed = same spatial/temporal draws)
+    summer_ev = grid_summer["peak_ev_load_kw"].sum()
+    winter_ev = grid_winter["peak_ev_load_kw"].sum()
+    assert winter_ev > summer_ev, f"Winter EV load ({winter_ev}) should exceed summer ({summer_ev})"

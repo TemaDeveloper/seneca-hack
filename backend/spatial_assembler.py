@@ -181,6 +181,73 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
         except Exception as e:
             print(f"[WARNING] Failed to process real Toronto Hydro data: {e}")
 
+    # Step 3.6: Overlay Hydro One station-level capacity for L-prefix FSAs
+    # Source: Hydro One Needs Assessment Reports (GTA West 2024, GTA East 2024)
+    # Station LTR (MW) assigned to nearest FSAs via closest-station matching
+    station_csv = os.path.join(DATA_DIR, "hydro_one_stations.csv")
+    if os.path.exists(station_csv):
+        print("Overlaying Hydro One station capacity data for suburban GTA...")
+        try:
+            stations = pd.read_csv(station_csv)
+            station_points = gpd.GeoDataFrame(
+                stations,
+                geometry=gpd.points_from_xy(stations["lon"], stations["lat"]),
+                crs="EPSG:4326"
+            )
+
+            # Only apply to FSAs that still have proxy capacity (not already set by Toronto Hydro)
+            # Identify FSAs with proxy defaults
+            proxy_fsas = gdf[gdf["proxy_capacity_kw"].isin(CAPACITY_MAP.values())].copy()
+
+            if not proxy_fsas.empty:
+                # Project to UTM for accurate distance calculation
+                proxy_utm = proxy_fsas.to_crs(epsg=32617)
+                proxy_centroids = proxy_utm.geometry.centroid
+                stations_utm = station_points.to_crs(epsg=32617)
+
+                # For each proxy FSA, find the nearest station
+                from shapely.ops import nearest_points
+
+                nearest_ltr = []
+                for idx, centroid in enumerate(proxy_centroids):
+                    min_dist = float("inf")
+                    best_ltr = None
+                    for _, st in stations_utm.iterrows():
+                        dist = centroid.distance(st.geometry)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_ltr = st["ltr_mw"]
+                    nearest_ltr.append(best_ltr)
+
+                # Convert station MW to per-FSA kW estimate
+                # Each station serves ~10-20 FSAs, so divide by estimated service count
+                # and convert MW to kW
+                proxy_fsas = proxy_fsas.copy()
+                proxy_fsas["station_ltr_mw"] = nearest_ltr
+
+                # Count how many proxy FSAs each station serves (for fair division)
+                # Group by nearest station LTR to estimate share
+                station_fsa_counts = pd.Series(nearest_ltr).value_counts()
+
+                per_fsa_kw = []
+                for ltr in nearest_ltr:
+                    n_fsas = station_fsa_counts[ltr]
+                    # Station LTR in MW / number of FSAs it serves * 1000 = kW per FSA
+                    # But station capacity is shared with existing load (~70% used)
+                    # Available headroom ≈ 30% of station capacity
+                    headroom_fraction = 0.30
+                    kw = (ltr * headroom_fraction * 1000) / n_fsas
+                    per_fsa_kw.append(min(max(int(kw), 100), 5000))  # Floor 100 kW, cap 5000 kW
+
+                # Apply via map to avoid index alignment issues
+                fsa_to_cap = dict(zip(proxy_fsas["fsa"].values, per_fsa_kw))
+                mapped = gdf["fsa"].map(fsa_to_cap)
+                gdf["proxy_capacity_kw"] = mapped.fillna(gdf["proxy_capacity_kw"]).astype(int)
+
+                print(f"Applied Hydro One station capacity to {len(proxy_fsas)} suburban FSAs.")
+        except Exception as e:
+            print(f"[WARNING] Failed to process Hydro One station data: {e}")
+
     # Step 4: Compute centroids (for marker placement in later phases)
     # Project to UTM 17N for accurate centroid, then extract lat/lon
     gdf_projected = gdf.to_crs(epsg=32617)
