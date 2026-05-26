@@ -579,6 +579,35 @@ def test_weekly_hourly_aggregation_is_unique_and_energy_conserving():
     assert np.isclose(hourly["ev_load_kw"].sum(), hourly["energy_kwh"].sum(), rtol=0, atol=1e-6)
 
 
+def test_batched_weekly_aggregation_matches_single_batch_outputs():
+    from mobility_simulator import EDGE_FLOW_COLUMNS, HOURLY_CHARGE_COLUMNS, MobilityConfig, MobilitySimulationEngine
+
+    engine = MobilitySimulationEngine(MobilityConfig(ev_probability=0.40, road_graph_source="fsa_adjacency", charger_source="zone_proxy"))
+    people, itinerary = engine.generate_weekly_itinerary(num_people=180, seed=881)
+    legs, charges = engine.simulate_weekly_charging(people, itinerary, seed=882)
+    hourly = engine.aggregate_charge_events(charges)
+    edge_flows = engine.aggregate_fsa_corridor_flows(legs)
+    batched = engine.run_weekly_batched_aggregation(num_people=180, seed=881, batch_size=500, edge_flow_detail="fsa")
+
+    sort_hourly = ["fsa", "day", "hour", "event_type", "patch_type"]
+    sort_edge = ["day", "hour", "edge_u", "edge_v", "fsa", "zone_type"]
+    pd.testing.assert_frame_equal(
+        hourly.sort_values(sort_hourly).reset_index(drop=True)[HOURLY_CHARGE_COLUMNS],
+        batched["hourly"].sort_values(sort_hourly).reset_index(drop=True)[HOURLY_CHARGE_COLUMNS],
+        check_exact=False,
+        rtol=1e-9,
+        atol=1e-9,
+    )
+    pd.testing.assert_frame_equal(
+        edge_flows.sort_values(sort_edge).reset_index(drop=True)[EDGE_FLOW_COLUMNS],
+        batched["edge_flows"].sort_values(sort_edge).reset_index(drop=True)[EDGE_FLOW_COLUMNS],
+        check_exact=False,
+        rtol=1e-9,
+        atol=1e-9,
+    )
+    assert int(batched["batches"]["people"].sum()) == 180
+
+
 def test_validation_catches_charge_event_accounting_breaks():
     from mobility_simulator import MobilityConfig, MobilitySimulationEngine
     from simulation_validation import ValidationOptions, _charging_checks

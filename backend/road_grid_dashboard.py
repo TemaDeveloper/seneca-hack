@@ -35,7 +35,22 @@ class RoadGridSimulationResult:
     hourly: pd.DataFrame
     grid_load: pd.DataFrame
     edge_flows: pd.DataFrame
+    batch_summary: pd.DataFrame
     peak_grid: pd.DataFrame
+    edge_flow_detail: str
+    is_batched: bool
+
+    @property
+    def trip_leg_count(self) -> int:
+        return _count_rows(self.legs, self.batch_summary, "leg_rows")
+
+    @property
+    def itinerary_row_count(self) -> int:
+        return _count_rows(self.itinerary, self.batch_summary, "itinerary_rows")
+
+    @property
+    def charge_event_count(self) -> int:
+        return _count_rows(self.charges, self.batch_summary, "charge_rows")
 
 
 def efficiency_for_temperature(temperature_celsius: float, *, base_efficiency: float = BASE_EFFICIENCY_KWH_PER_KM) -> float:
@@ -56,12 +71,15 @@ def run_weekly_road_grid_simulation(
     time_window: TimeWindow | str = "Full Week",
     seed: int = 42,
     require_real_grid: bool = True,
+    batch_size: int | None = None,
+    edge_flow_detail: Literal["full", "fsa"] = "full",
 ) -> RoadGridSimulationResult:
     """
     Run the end-to-end weekly road-grid model and return dashboard artifacts.
 
     `num_people` is the sampled driver/person count. `grid_ev_load_scale`
     expands sampled hourly charging load to the represented population.
+    Supplying `batch_size` enables bounded-memory aggregation for large runs.
     """
     cfg = MobilityConfig(
         ev_probability=float(ev_probability),
@@ -71,11 +89,43 @@ def run_weekly_road_grid_simulation(
         charger_source="afdc" if require_real_grid else "auto",
     )
     engine = MobilitySimulationEngine(cfg)
-    people, itinerary = engine.generate_weekly_itinerary(num_people=int(num_people), seed=seed)
-    legs, charges = engine.simulate_weekly_charging(people, itinerary, seed=seed + 1)
-    hourly = engine.aggregate_charge_events(charges)
-    grid_load = engine.aggregate_weekly_grid_load(hourly)
-    edge_flows = engine.aggregate_edge_flows(legs)
+    use_batched = batch_size is not None and int(num_people) > int(batch_size)
+    if use_batched:
+        aggregated = engine.run_weekly_batched_aggregation(
+            int(num_people),
+            seed=seed,
+            batch_size=int(batch_size),
+            edge_flow_detail=edge_flow_detail,
+        )
+        people = pd.DataFrame()
+        itinerary = pd.DataFrame()
+        legs = pd.DataFrame()
+        charges = pd.DataFrame()
+        hourly = aggregated["hourly"]
+        grid_load = aggregated["grid_load"]
+        edge_flows = aggregated["edge_flows"]
+        batch_summary = aggregated["batches"]
+    else:
+        people, itinerary = engine.generate_weekly_itinerary(num_people=int(num_people), seed=seed)
+        legs, charges = engine.simulate_weekly_charging(people, itinerary, seed=seed + 1)
+        hourly = engine.aggregate_charge_events(charges)
+        grid_load = engine.aggregate_weekly_grid_load(hourly)
+        if edge_flow_detail == "full":
+            edge_flows = engine.aggregate_edge_flows(legs)
+        elif edge_flow_detail == "fsa":
+            edge_flows = engine.aggregate_fsa_corridor_flows(legs)
+        else:
+            raise ValueError("edge_flow_detail must be 'full' or 'fsa'.")
+        batch_summary = pd.DataFrame([{
+            "batch": 0,
+            "seed": int(seed),
+            "people": int(num_people),
+            "itinerary_rows": len(itinerary),
+            "leg_rows": len(legs),
+            "charge_rows": len(charges),
+            "hourly_rows": len(hourly),
+            "edge_flow_rows": len(edge_flows),
+        }])
     peak_grid = summarize_peak_grid_by_fsa(grid_load, time_window=time_window)
     return RoadGridSimulationResult(
         engine=engine,
@@ -86,8 +136,19 @@ def run_weekly_road_grid_simulation(
         hourly=hourly,
         grid_load=grid_load,
         edge_flows=edge_flows,
+        batch_summary=batch_summary,
         peak_grid=peak_grid,
+        edge_flow_detail=edge_flow_detail,
+        is_batched=use_batched,
     )
+
+
+def _count_rows(frame: pd.DataFrame, batch_summary: pd.DataFrame, column: str) -> int:
+    if not frame.empty:
+        return int(len(frame))
+    if not batch_summary.empty and column in batch_summary:
+        return int(batch_summary[column].sum())
+    return 0
 
 
 def summarize_peak_grid_by_fsa(grid_load: pd.DataFrame, *, time_window: TimeWindow | str = "Full Week") -> pd.DataFrame:

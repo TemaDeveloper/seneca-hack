@@ -328,6 +328,7 @@ class MobilitySimulationEngine:
         cache_key = self._static_context_cache_key(self.config)
         if cache_key is not None and cache_key in _STATIC_CONTEXT_CACHE:
             self._apply_static_context(_STATIC_CONTEXT_CACHE[cache_key])
+            self._prepare_behavior_caches()
             return
 
         self.base_gdf = load_enriched_geodataframe()
@@ -345,6 +346,7 @@ class MobilitySimulationEngine:
         self.charger_catalog.snap_to_road_network(self.road_network)
         self.route_km = self.road_network.route_km
         self.freeflow_time_h = self.road_network.freeflow_time_h
+        self._prepare_behavior_caches()
         if cache_key is not None:
             _STATIC_CONTEXT_CACHE[cache_key] = self._static_context()
 
@@ -396,6 +398,14 @@ class MobilitySimulationEngine:
         self.charger_catalog = context.charger_catalog
         self.route_km = context.route_km
         self.freeflow_time_h = context.freeflow_time_h
+
+    def _prepare_behavior_caches(self) -> None:
+        self._fsa_indices = np.arange(len(self.fsas), dtype=int)
+        self._zone_attraction_cache = {
+            dest_type: pd.Series(self.zone_types).map(DEST_ATTRACTION_BY_ZONE[dest_type]).fillna(1.0).to_numpy(dtype=float)
+            for dest_type in DEST_TYPES
+        }
+        self._destination_prob_cache: dict[tuple[str, int], np.ndarray] = {}
 
     def _prepare_spatial_tables(self) -> None:
         gdf = self.base_gdf.copy()
@@ -458,26 +468,59 @@ class MobilitySimulationEngine:
         return max(total_population * population_share / float(num_people), 0.0)
 
     def _destination_probs_for_type(self, home_idx: int, dest_type: str, hour: int) -> np.ndarray:
-        zone_attraction = pd.Series(self.zone_types).map(DEST_ATTRACTION_BY_ZONE[dest_type]).fillna(1.0).to_numpy()
-        route_km = self.route_km[home_idx]
+        hour = int(hour) % 24
+        matrix = self._destination_prob_matrix(dest_type, hour)
+        return matrix[int(home_idx)]
+
+    def _destination_prob_matrix(self, dest_type: str, hour: int) -> np.ndarray:
+        key = (str(dest_type), int(hour) % 24)
+        cached = self._destination_prob_cache.get(key)
+        if cached is not None:
+            return cached
+
+        dest_type = str(dest_type)
+        hour = int(hour) % 24
+        zone_attraction = self._zone_attraction_cache[dest_type]
+        route_km = self.route_km
         distance_decay = np.exp(-route_km / DEST_TAU_KM[dest_type])
         long_trip_penalty = np.exp(-np.maximum(route_km - DEST_SOFT_MAX_KM[dest_type], 0.0) / 8.0)
 
-        # A coarse traffic proxy: make peak-hour destinations slightly more likely
-        # where the current zone taxonomy says people are plausibly gathering.
-        peak_factor = np.ones(len(self.fsas))
+        peak_factor = np.ones(len(self.fsas), dtype=float)
         if 7 <= hour <= 9 and dest_type in {"work", "school", "transit_hub"}:
-            peak_factor *= pd.Series(self.zone_types).map({"office_park": 1.4, "retail_hub": 1.1, "transit_hub": 1.5}).fillna(1.0).to_numpy()
+            peak_factor *= pd.Series(self.zone_types).map({"office_park": 1.4, "retail_hub": 1.1, "transit_hub": 1.5}).fillna(1.0).to_numpy(dtype=float)
         elif 16 <= hour <= 19 and dest_type == "home":
-            peak_factor *= pd.Series(self.zone_types).map({"residential": 1.5, "retail_hub": 0.8, "office_park": 0.5}).fillna(1.0).to_numpy()
+            peak_factor *= pd.Series(self.zone_types).map({"residential": 1.5, "retail_hub": 0.8, "office_park": 0.5}).fillna(1.0).to_numpy(dtype=float)
 
-        traffic_factor = self._traffic_attraction_for(dest_type, hour)
-        probs = zone_attraction * distance_decay * long_trip_penalty * peak_factor * traffic_factor
-        if dest_type == "home":
-            probs[home_idx] *= 8.0
-        else:
-            probs[home_idx] *= 0.25
-        return _normalize(probs)
+        destination_weight = zone_attraction * peak_factor * self._traffic_attraction_for(dest_type, hour)
+        probs = distance_decay * long_trip_penalty * destination_weight[None, :]
+        probs = probs.astype(np.float64, copy=True)
+        diagonal_multiplier = 8.0 if dest_type == "home" else 0.25
+        np.fill_diagonal(probs, np.diag(probs) * diagonal_multiplier)
+        row_sums = probs.sum(axis=1)
+        bad = row_sums <= 0
+        if bad.any():
+            probs[bad, :] = 1.0 / len(self.fsas)
+            row_sums[bad] = 1.0
+        probs = probs / row_sums[:, None]
+        self._destination_prob_cache[key] = probs
+        return probs
+
+    def _sample_destination_indices(
+        self,
+        rng: np.random.Generator,
+        origin_idx: np.ndarray,
+        dest_type: str,
+        hour: int,
+    ) -> np.ndarray:
+        origin_idx = np.asarray(origin_idx, dtype=int)
+        dest = np.empty(len(origin_idx), dtype=int)
+        if len(origin_idx) == 0:
+            return dest
+        matrix = self._destination_prob_matrix(dest_type, hour)
+        for origin in np.unique(origin_idx):
+            mask = origin_idx == origin
+            dest[mask] = rng.choice(self._fsa_indices, size=int(mask.sum()), p=matrix[int(origin)])
+        return dest
 
     def _traffic_attraction_for(self, dest_type: str, hour: int) -> np.ndarray:
         exponent = max(float(self.config.traffic_attraction_exponent), 0.0)
@@ -518,9 +561,9 @@ class MobilitySimulationEngine:
         dest_type = rng.choice(np.array(DEST_TYPES), size=num_people, p=dest_type_probs)
 
         dest_idx = np.empty(num_people, dtype=int)
-        for i in range(num_people):
-            probs = self._destination_probs_for_type(int(home_idx[i]), str(dest_type[i]), hour)
-            dest_idx[i] = rng.choice(np.arange(len(self.fsas)), p=probs)
+        for value in np.unique(dest_type):
+            mask = dest_type == value
+            dest_idx[mask] = self._sample_destination_indices(rng, home_idx[mask], str(value), hour)
 
         direct_km = self.distance_km[home_idx, dest_idx]
         local_trip_km = rng.gamma(shape=2.0, scale=1.0, size=num_people)
@@ -605,19 +648,22 @@ class MobilitySimulationEngine:
 
         work_idx = np.full(num_people, -1, dtype=int)
         school_idx = np.full(num_people, -1, dtype=int)
-        for i in range(num_people):
-            if person_types[i] == "worker":
-                work_idx[i] = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(int(home_idx[i]), "work", 8))
-            if person_types[i] in {"student", "worker", "other"}:
-                school_idx[i] = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(int(home_idx[i]), "school", 8))
+        worker_mask = person_types == "worker"
+        school_mask = np.isin(person_types, ["student", "worker", "other"])
+        work_idx[worker_mask] = self._sample_destination_indices(rng, home_idx[worker_mask], "work", 8)
+        school_idx[school_mask] = self._sample_destination_indices(rng, home_idx[school_mask], "school", 8)
+
+        person_ids = np.array([f"P_{i:06d}" for i in range(1, num_people + 1)], dtype=object)
+        home_fsa = self.fsas[home_idx]
+        home_zone_type = self.zone_types[home_idx]
 
         people = pd.DataFrame({
-            "person_id": [f"P_{i:06d}" for i in range(1, num_people + 1)],
+            "person_id": person_ids,
             "person_type": person_types,
             "is_ev": is_ev,
             "home_idx": home_idx,
-            "home_fsa": self.fsas[home_idx],
-            "home_zone_type": self.zone_types[home_idx],
+            "home_fsa": home_fsa,
+            "home_zone_type": home_zone_type,
             "initial_soc": np.round(initial_soc, 3),
             "has_home_charger": has_home_charger,
             "has_work_charger": has_work_charger,
@@ -626,13 +672,21 @@ class MobilitySimulationEngine:
         })
 
         legs: list[dict] = []
-        for person_i, person in people.iterrows():
-            current_idx = int(person["home_idx"])
+        for person_i in range(num_people):
+            current_idx = int(home_idx[person_i])
             current_activity = "home"
             last_arrival_abs = 0.0
+            person_type = str(person_types[person_i])
+            person_home_idx = int(home_idx[person_i])
+            person_work_idx = int(work_idx[person_i])
+            person_school_idx = int(school_idx[person_i])
+            person_id = str(person_ids[person_i])
+            person_is_ev = bool(is_ev[person_i])
+            person_home_fsa = str(home_fsa[person_i])
+            person_home_zone_type = str(home_zone_type[person_i])
             for day in range(7):
                 day_type: DayType = "weekday" if day < 5 else "weekend"
-                day_plan = self._sample_day_plan(rng, str(person["person_type"]), day_type, int(person["home_idx"]), int(person["work_idx"]), int(person["school_idx"]))
+                day_plan = self._sample_day_plan(rng, person_type, day_type, person_home_idx, person_work_idx, person_school_idx)
                 for stop in day_plan:
                     route = self.road_network.route(current_idx, stop.dest_idx)
                     planned_abs = day * 24.0 + stop.hour
@@ -651,9 +705,9 @@ class MobilitySimulationEngine:
                             break
                     route_km = route.distance_km
                     legs.append({
-                        "person_id": person["person_id"],
-                        "person_type": person["person_type"],
-                        "is_ev": bool(person["is_ev"]),
+                        "person_id": person_id,
+                        "person_type": person_type,
+                        "is_ev": person_is_ev,
                         "day": day,
                         "day_type": day_type,
                         "origin_fsa": self.fsas[current_idx],
@@ -681,10 +735,10 @@ class MobilitySimulationEngine:
                     last_arrival_abs = arrival_abs
 
                 # If the sampled day did not return home, force a home leg.
-                if current_idx != int(person["home_idx"]):
+                if current_idx != person_home_idx:
                     depart_abs = max(last_arrival_abs + 0.25, day * 24.0 + 20.5)
-                    route = self.road_network.route(current_idx, int(person["home_idx"]))
-                    duration_h = self.road_network.travel_time_h(current_idx, int(person["home_idx"]), depart_abs, route=route)
+                    route = self.road_network.route(current_idx, person_home_idx)
+                    duration_h = self.road_network.travel_time_h(current_idx, person_home_idx, depart_abs, route=route)
                     route_km = route.distance_km
                     arrival_abs = depart_abs + duration_h
                     if arrival_abs > 168.0:
@@ -693,19 +747,19 @@ class MobilitySimulationEngine:
                         if depart_abs >= 168.0 or arrival_abs > 168.0:
                             continue
                     legs.append({
-                        "person_id": person["person_id"],
-                        "person_type": person["person_type"],
-                        "is_ev": bool(person["is_ev"]),
+                        "person_id": person_id,
+                        "person_type": person_type,
+                        "is_ev": person_is_ev,
                         "day": day,
                         "day_type": day_type,
                         "origin_fsa": self.fsas[current_idx],
                         "origin_zone_type": self.zone_types[current_idx],
                         "origin_activity": current_activity,
-                        "dest_fsa": person["home_fsa"],
-                        "dest_zone_type": person["home_zone_type"],
+                        "dest_fsa": person_home_fsa,
+                        "dest_zone_type": person_home_zone_type,
                         "dest_type": "home",
                         "origin_idx": current_idx,
-                        "dest_idx": int(person["home_idx"]),
+                        "dest_idx": person_home_idx,
                         "depart_hour_abs": depart_abs,
                         "arrival_hour_abs": arrival_abs,
                         "planned_arrival_hour_abs": np.nan,
@@ -718,7 +772,7 @@ class MobilitySimulationEngine:
                         "route_path": "|".join(map(str, route.path)),
                         "reachable_route": bool(route.reachable),
                     })
-                    current_idx = int(person["home_idx"])
+                    current_idx = person_home_idx
                     current_activity = "home"
                     last_arrival_abs = arrival_abs
 
@@ -744,7 +798,7 @@ class MobilitySimulationEngine:
             if person_type == "worker" and work_idx >= 0 and rng.random() < cfg.worker_weekday_work_probability:
                 plan.append(PlannedStop("work", work_idx, float(np.clip(rng.normal(8.95, 0.35), 7.75, 10.0)), "arrive_by"))
                 if rng.random() < cfg.after_work_stop_probability:
-                    retail_idx = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(work_idx, "retail", 17))
+                    retail_idx = rng.choice(self._fsa_indices, p=self._destination_probs_for_type(work_idx, "retail", 17))
                     plan.append(PlannedStop("retail", int(retail_idx), float(np.clip(rng.normal(17.25, 0.55), 16.0, 19.25)), "depart_at"))
                     plan.append(PlannedStop("home", home_idx, float(np.clip(rng.normal(19.2, 0.7), 17.5, 22.0)), "depart_at"))
                 else:
@@ -754,7 +808,7 @@ class MobilitySimulationEngine:
                 plan.append(PlannedStop("home", home_idx, float(np.clip(rng.normal(15.5, 0.8), 14.0, 18.5)), "depart_at"))
             elif rng.random() < cfg.weekday_nonworker_outing_probability:
                 dest_type = _sample_outing_type(rng, day_type)
-                dest_idx = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(home_idx, dest_type, 13))
+                dest_idx = rng.choice(self._fsa_indices, p=self._destination_probs_for_type(home_idx, dest_type, 13))
                 plan.append(PlannedStop(dest_type, int(dest_idx), float(np.clip(rng.normal(12.8, 1.5), 9.0, 17.0)), "depart_at"))
                 plan.append(PlannedStop("home", home_idx, float(np.clip(rng.normal(15.5, 1.8), 11.0, 21.0)), "depart_at"))
         else:
@@ -763,11 +817,11 @@ class MobilitySimulationEngine:
                 plan.append(PlannedStop("home", home_idx, float(np.clip(rng.normal(17.0, 1.5), 13.0, 22.0)), "depart_at"))
             elif rng.random() < cfg.weekend_outing_probability:
                 first_type = _sample_outing_type(rng, day_type)
-                first_idx = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(home_idx, first_type, 13))
+                first_idx = rng.choice(self._fsa_indices, p=self._destination_probs_for_type(home_idx, first_type, 13))
                 plan.append(PlannedStop(first_type, int(first_idx), float(np.clip(rng.normal(12.2, 1.8), 8.0, 17.0)), "depart_at"))
                 if rng.random() < cfg.weekend_second_stop_probability:
                     second_type = "leisure" if first_type == "retail" else "retail"
-                    second_idx = rng.choice(np.arange(len(self.fsas)), p=self._destination_probs_for_type(int(first_idx), second_type, 16))
+                    second_idx = rng.choice(self._fsa_indices, p=self._destination_probs_for_type(int(first_idx), second_type, 16))
                     plan.append(PlannedStop(second_type, int(second_idx), float(np.clip(rng.normal(16.2, 1.4), 12.0, 20.0)), "depart_at"))
                     plan.append(PlannedStop("home", home_idx, float(np.clip(rng.normal(19.0, 1.5), 15.0, 23.0)), "depart_at"))
                 else:
@@ -954,6 +1008,95 @@ class MobilitySimulationEngine:
                         charge_rows.append(event)
 
         return pd.DataFrame(leg_rows, columns=WEEKLY_LEG_COLUMNS), pd.DataFrame(charge_rows, columns=CHARGE_EVENT_COLUMNS)
+
+    def run_weekly_batched_aggregation(
+        self,
+        num_people: int,
+        *,
+        seed: int | None = None,
+        batch_size: int = 25_000,
+        edge_flow_detail: Literal["full", "fsa"] = "fsa",
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Run exact weekly simulation in bounded-memory batches.
+
+        This keeps the same per-person itinerary and SoC/charging rules as
+        `generate_weekly_itinerary` + `simulate_weekly_charging`, but only keeps
+        aggregated hourly charging and road-flow tables across batches. It is
+        the intended path for 100k+ population runs.
+        """
+        num_people = int(num_people)
+        batch_size = int(batch_size)
+        if num_people <= 0:
+            empty_hourly = pd.DataFrame(columns=HOURLY_CHARGE_COLUMNS)
+            return {
+                "hourly": empty_hourly,
+                "grid_load": self.aggregate_weekly_grid_load(empty_hourly),
+                "edge_flows": pd.DataFrame(columns=EDGE_FLOW_COLUMNS),
+                "batches": pd.DataFrame(columns=["batch", "seed", "people", "itinerary_rows", "leg_rows", "charge_rows", "hourly_rows", "edge_flow_rows"]),
+            }
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+        if edge_flow_detail not in {"full", "fsa"}:
+            raise ValueError("edge_flow_detail must be 'full' or 'fsa'.")
+
+        base_seed = 0 if seed is None else int(seed)
+        hourly_parts: list[pd.DataFrame] = []
+        edge_parts: list[pd.DataFrame] = []
+        batch_rows: list[dict[str, int]] = []
+        for batch_idx, start in enumerate(range(0, num_people, batch_size)):
+            size = min(batch_size, num_people - start)
+            batch_seed = base_seed + batch_idx * 10_007
+            people, itinerary = self.generate_weekly_itinerary(size, seed=batch_seed)
+            legs, charges = self.simulate_weekly_charging(people, itinerary, seed=batch_seed + 1)
+            hourly = self.aggregate_charge_events(charges)
+            if edge_flow_detail == "full":
+                edge_flows = self.aggregate_edge_flows(legs)
+            else:
+                edge_flows = self.aggregate_fsa_corridor_flows(legs)
+            if not hourly.empty:
+                hourly_parts.append(hourly)
+            if not edge_flows.empty:
+                edge_parts.append(edge_flows)
+            batch_rows.append({
+                "batch": batch_idx,
+                "seed": batch_seed,
+                "people": size,
+                "itinerary_rows": len(itinerary),
+                "leg_rows": len(legs),
+                "charge_rows": len(charges),
+                "hourly_rows": len(hourly),
+                "edge_flow_rows": len(edge_flows),
+            })
+
+        hourly_all = self._sum_hourly_parts(hourly_parts)
+        edge_all = self._sum_edge_flow_parts(edge_parts)
+        return {
+            "hourly": hourly_all,
+            "grid_load": self.aggregate_weekly_grid_load(hourly_all),
+            "edge_flows": edge_all,
+            "batches": pd.DataFrame(batch_rows),
+        }
+
+    @staticmethod
+    def _sum_hourly_parts(parts: list[pd.DataFrame]) -> pd.DataFrame:
+        if not parts:
+            return pd.DataFrame(columns=HOURLY_CHARGE_COLUMNS)
+        return (
+            pd.concat(parts, ignore_index=True)
+            .groupby(["fsa", "day", "hour", "event_type", "patch_type"], as_index=False)[["ev_load_kw", "energy_kwh"]]
+            .sum()
+        )[HOURLY_CHARGE_COLUMNS]
+
+    @staticmethod
+    def _sum_edge_flow_parts(parts: list[pd.DataFrame]) -> pd.DataFrame:
+        if not parts:
+            return pd.DataFrame(columns=EDGE_FLOW_COLUMNS)
+        return (
+            pd.concat(parts, ignore_index=True)
+            .groupby(["day", "hour", "edge_u", "edge_v", "fsa", "zone_type"], as_index=False)
+            .agg(vehicle_count=("vehicle_count", "sum"), ev_count=("ev_count", "sum"), route_km=("route_km", "sum"))
+        )[EDGE_FLOW_COLUMNS]
 
     def _future_needs_until_strong_charger(self, legs: list[dict], person: dict | pd.Series, capacity: float) -> list[float]:
         needs: list[float] = []

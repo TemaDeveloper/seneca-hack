@@ -113,3 +113,31 @@ def test_weekly_dashboard_adapter_maps_hackathon_data_to_real_osm_grid():
     assert result.engine.charger_catalog.public["road_node_id"].notna().all()
     assert result.charges["road_node_id"].notna().all()
     assert result.grid_load[["fsa", "day", "hour"]].drop_duplicates().shape[0] == len(result.engine.base_gdf) * 168
+
+
+def test_weekly_dashboard_adapter_uses_batched_fsa_flow_for_large_runs():
+    from road_grid_dashboard import run_weekly_road_grid_simulation
+
+    result = run_weekly_road_grid_simulation(
+        num_people=700,
+        ev_probability=0.6,
+        temperature_celsius=10.0,
+        grid_ev_load_scale=2.0,
+        time_window="Full Week",
+        seed=841,
+        require_real_grid=False,
+        batch_size=250,
+        edge_flow_detail="fsa",
+    )
+
+    assert result.is_batched
+    assert result.edge_flow_detail == "fsa"
+    assert result.people.empty
+    assert result.legs.empty
+    assert len(result.batch_summary) == 3
+    assert int(result.batch_summary["people"].sum()) == 700
+    assert result.trip_leg_count == int(result.batch_summary["leg_rows"].sum())
+    assert result.charge_event_count == int(result.batch_summary["charge_rows"].sum())
+    assert not result.grid_load.empty
+    assert not result.edge_flows.empty
+    assert len(result.peak_grid) == result.engine.base_gdf["fsa"].nunique()

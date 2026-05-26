@@ -27,7 +27,8 @@ from map_builder import (
 # ---------------------------------------------------------------------------
 GTA_BASE_FLEET = 3_000_000  # Registered vehicles in GTA
 DEFAULT_SAMPLED_DRIVERS = 2_500
-MAX_SAMPLED_DRIVERS = 10_000
+MAX_SAMPLED_DRIVERS = 300_000
+HIGH_SCALE_BATCH_SIZE = 25_000
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -72,7 +73,7 @@ time_of_day = st.sidebar.selectbox(
 sampled_drivers = st.sidebar.slider(
     "Sampled Drivers",
     min_value=500, max_value=MAX_SAMPLED_DRIVERS, value=DEFAULT_SAMPLED_DRIVERS, step=500,
-    help="Weekly agent sample size. Results are scaled to the represented GTA vehicle fleet."
+    help="Weekly agent sample size. Runs above 25k use bounded-memory FSA-corridor road-flow aggregation."
 )
 
 max_stations = st.sidebar.slider(
@@ -111,6 +112,8 @@ if run_sim:
             time_window=time_of_day,
             seed=42,
             require_real_grid=True,
+            batch_size=HIGH_SCALE_BATCH_SIZE,
+            edge_flow_detail="fsa",
         )
         grid_df = result.peak_grid.copy()
 
@@ -121,9 +124,11 @@ if run_sim:
             "road_nodes": result.engine.road_network.summary().node_count,
             "road_edges": result.engine.road_network.summary().edge_count,
             "chargers": len(result.engine.charger_catalog.public),
-            "trip_legs": len(result.legs),
-            "charge_events": len(result.charges),
+            "trip_legs": result.trip_leg_count,
+            "charge_events": result.charge_event_count,
             "edge_flow_rows": len(result.edge_flows),
+            "edge_flow_detail": result.edge_flow_detail,
+            "is_batched": result.is_batched,
         }
         # Clear old optimizer results
         st.session_state.pop("optimizer_df", None)
@@ -163,7 +168,9 @@ if summary:
         f"Road grid: {summary['road_source']} "
         f"({summary['road_nodes']:,} nodes / {summary['road_edges']:,} edges), "
         f"public chargers: {summary['chargers']:,}, "
-        f"legs: {summary['trip_legs']:,}, edge-flow rows: {summary['edge_flow_rows']:,}"
+        f"legs: {summary['trip_legs']:,}, "
+        f"edge-flow rows: {summary['edge_flow_rows']:,} ({summary['edge_flow_detail']}"
+        f"{', batched' if summary['is_batched'] else ''})"
     )
 
 m1 = build_demand_heatmap(gdf, grid_df)
