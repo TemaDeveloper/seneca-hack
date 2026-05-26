@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import time
 
 from mobility_simulator import MobilityConfig, MobilitySimulationEngine
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-people", type=int, default=100_000)
     parser.add_argument("--batch-size", type=int, default=25_000)
@@ -23,8 +24,12 @@ def main() -> None:
     parser.add_argument("--ev-probability", type=float, default=0.20)
     parser.add_argument("--real-grid", action="store_true")
     parser.add_argument("--edge-flow-detail", choices=["fsa", "full"], default="fsa")
-    args = parser.parse_args()
+    parser.add_argument("--max-seconds", type=float, default=None, help="Fail if total runtime exceeds this threshold.")
+    parser.add_argument("--output-json", type=Path, default=None, help="Optional path for the benchmark JSON payload.")
+    return parser
 
+
+def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
     cfg = MobilityConfig(
         ev_probability=args.ev_probability,
         road_graph_source="osm" if args.real_grid else "auto",
@@ -40,6 +45,7 @@ def main() -> None:
     )
     elapsed = time.perf_counter() - started
     batches = result["batches"]
+    max_seconds = None if args.max_seconds is None else float(args.max_seconds)
     payload = {
         "num_people": int(args.num_people),
         "batch_size": int(args.batch_size),
@@ -60,8 +66,27 @@ def main() -> None:
         "edge_route_km": round(float(result["edge_flows"]["route_km"].sum()), 3) if not result["edge_flows"].empty else 0.0,
         "total_s": round(elapsed, 3),
         "people_per_second": round(args.num_people / elapsed, 1) if elapsed > 0 else None,
+        "max_seconds": max_seconds,
+        "passed_max_seconds": None if max_seconds is None else elapsed <= max_seconds,
     }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    return payload
+
+
+def main(args: argparse.Namespace | None = None) -> dict[str, object]:
+    if args is None:
+        parser = build_parser()
+        args = parser.parse_args()
+    payload = run_benchmark(args)
+    text = json.dumps(payload, indent=2, sort_keys=True)
+    print(text)
+    if args.output_json is not None:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(text + "\n", encoding="utf-8")
+    if payload["passed_max_seconds"] is False:
+        raise SystemExit(
+            f"Benchmark exceeded --max-seconds: {payload['total_s']}s > {payload['max_seconds']}s"
+        )
+    return payload
 
 
 if __name__ == "__main__":
