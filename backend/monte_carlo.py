@@ -85,11 +85,25 @@ class SimulationEngine:
 
     @staticmethod
     def _load_ieso_profile() -> pd.DataFrame:
-        """Load the 24-hour IESO baseline load profile."""
-        ieso_path = os.path.join(DATA_DIR, "ieso_load_profile.csv")
-        if not os.path.exists(ieso_path):
-            raise FileNotFoundError(f"Missing {ieso_path}. Run data_preparation/prepare_data.py first.")
-        return pd.read_csv(ieso_path)
+        """
+        Loads the baseline load profile.
+        Prioritizes the hyper-accurate 'greenbutton_profile.csv' if available.
+        Falls back to the generic 'ieso_load_profile.csv' otherwise.
+        """
+        gb_profile = os.path.join(DATA_DIR, "greenbutton_profile.csv")
+        ieso_profile = os.path.join(DATA_DIR, "ieso_load_profile.csv")
+        
+        if os.path.exists(gb_profile):
+            # print("  -> Using hyper-accurate Green Button ESPI profile for baseline load.")
+            return pd.read_csv(gb_profile)
+            
+        if not os.path.exists(ieso_profile):
+            raise FileNotFoundError(
+                f"Load profile not found: {ieso_profile}\n"
+                "Run `python backend/scripts/prepare_data.py` first."
+            )
+        # print("  -> Using generic IESO profile for baseline load.")
+        return pd.read_csv(ieso_profile)
 
     def run_simulation(self, num_evs: int, time_of_day: Literal["Morning", "Evening", "Full Day"], temperature_celsius: float = 20.0) -> pd.DataFrame:
         """
@@ -296,7 +310,7 @@ if __name__ == "__main__":
     print("\n========================================================")
     print("GRID LOAD RESULTS (Per-FSA)")
     print("========================================================")
-    print(grid_results.head(15).to_string(index=False))
+    print(grid_results.to_string(index=False))
 
     overloaded_count = grid_results["overloaded"].sum()
     total_fsas = len(grid_results)

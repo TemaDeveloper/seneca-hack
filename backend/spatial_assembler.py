@@ -127,13 +127,60 @@ def load_enriched_geodataframe() -> gpd.GeoDataFrame:
     # Step 3: Assign proxy capacity
     gdf["proxy_capacity_kw"] = gdf["zone_type"].map(CAPACITY_MAP)
 
-    # Safety check — any unmapped zone types get residential capacity
     unmapped = gdf["proxy_capacity_kw"].isna().sum()
     if unmapped > 0:
         print(f"Warning: {unmapped} FSAs had unknown zone type — using residential capacity")
         gdf["proxy_capacity_kw"] = gdf["proxy_capacity_kw"].fillna(CAPACITY_MAP["residential"])
 
     gdf["proxy_capacity_kw"] = gdf["proxy_capacity_kw"].astype(int)
+
+    # Step 3.5: Overlay REAL Toronto Hydro data if available
+    hydro_geojson = os.path.join(DATA_DIR, "toronto_hydro_feeders.geojson")
+    if os.path.exists(hydro_geojson):
+        print("Overlaying real Toronto Hydro ArcGIS Feeder Capacity data...")
+        try:
+            feeders_gdf = gpd.read_file(hydro_geojson)
+            if feeders_gdf.crs.to_epsg() != 4326:
+                feeders_gdf = feeders_gdf.to_crs(epsg=4326)
+            
+            # Clean the Feeder_Capacity string (e.g., if it has units or commas)
+            def extract_kw(val):
+                if pd.isna(val): return None
+                val_str = str(val).lower().replace(",", "")
+                import re
+                # Find all numbers (including decimals)
+                nums = re.findall(r'\d+(?:\.\d+)?', val_str)
+                if not nums: return None
+                
+                # If there's a range like "0-499", take the upper bound (the last number)
+                num = float(nums[-1])
+                
+                if 'mva' in val_str or 'mw' in val_str:
+                    return num * 1000
+                return num
+                    
+            feeders_gdf["real_capacity_kw"] = feeders_gdf["Feeder_Capacity"].apply(extract_kw)
+            feeders_gdf = feeders_gdf.dropna(subset=["real_capacity_kw"])
+            
+            # Spatial join: Which feeders overlap which FSAs?
+            # We use 'intersects' because feeders span across borders
+            joined = gpd.sjoin(gdf, feeders_gdf, how="left", predicate="intersects")
+            
+            # For each FSA, find the minimum overlapping feeder capacity (the weakest link)
+            real_caps = joined.groupby("fsa")["real_capacity_kw"].min()
+            
+            # Only apply real capacities to FSAs inside Toronto (typically M-prefix, though some L might overlap)
+            # The spatial join will naturally only have matches where the Toronto Hydro data overlaps
+            mask = real_caps.notna() & (real_caps > 0)
+            
+            # Update the capacity
+            gdf.loc[gdf["fsa"].isin(real_caps[mask].index), "proxy_capacity_kw"] = real_caps[mask].values
+            
+            # Cast back to int
+            gdf["proxy_capacity_kw"] = gdf["proxy_capacity_kw"].astype(int)
+            print(f"Successfully applied real Toronto Hydro capacity limits to {mask.sum()} FSAs.")
+        except Exception as e:
+            print(f"[WARNING] Failed to process real Toronto Hydro data: {e}")
 
     # Step 4: Compute centroids (for marker placement in later phases)
     # Project to UTM 17N for accurate centroid, then extract lat/lon
@@ -162,7 +209,7 @@ if __name__ == "__main__":
     print(f"\nCapacity distribution:")
     print(gdf.groupby("zone_type")["proxy_capacity_kw"].first().to_string())
     print(f"\nSample rows:")
-    print(gdf[["fsa", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"]].head(10).to_string())
+    print(gdf[["fsa", "zone_type", "proxy_capacity_kw", "centroid_lat", "centroid_lon"]].to_string())
     print(f"\nBounds:")
     bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
     print(f"  Lon: {bounds[0]:.4f} to {bounds[2]:.4f}")
