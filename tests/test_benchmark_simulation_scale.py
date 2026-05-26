@@ -58,6 +58,15 @@ def test_scale_benchmark_threshold_failure_is_machine_readable():
 def test_committed_300k_benchmark_artifact_proves_speed_gate():
     artifact = json.loads(Path("docs/benchmarks/high_scale_benchmark_300000.json").read_text())
 
+    assert artifact["benchmark_schema_version"] == 2
+    assert artifact["command_args"]["num_people"] == 300_000
+    assert artifact["command_args"]["real_grid"] is True
+    assert artifact["command_args"]["edge_flow_detail"] == "fsa"
+    assert artifact["command_args"]["max_seconds"] == 600.0
+    assert isinstance(artifact["git_commit"], str)
+    assert artifact["git_dirty"] is False
+    assert artifact["python_version"] == "3.13.13"
+    assert artifact["machine"] == "arm64"
     assert artifact["num_people"] >= 300_000
     assert artifact["road_graph_source"] == "osm"
     assert artifact["edge_flow_detail"] == "fsa"
