@@ -86,6 +86,40 @@ def test_activity_poi_cache_requires_complete_coverage_metadata(tmp_path, monkey
     assert catalog.load_or_fetch_activity_pois(gdf, source="cache").source == "cache"
 
 
+def test_activity_poi_chunk_status_filters_by_graph_fingerprint(tmp_path, monkeypatch):
+    import activity_poi_catalog as catalog
+
+    monkeypatch.setattr(catalog, "ACTIVITY_POI_CHUNK_DIR", tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
+    row = {column: "" for column in catalog.POI_COLUMNS}
+    row.update({
+        "poi_id": "OSM_1",
+        "source": "osm",
+        "activity_type": "retail",
+        "lat": 43.0,
+        "lon": -79.0,
+        "weight": 1.0,
+        "fsa": "A1A",
+        "fsa_idx": 0,
+        "zone_type": "retail_hub",
+        "dedupe_key": "retail:test:43.0:-79.0",
+        "graph_fingerprint": "graph_a",
+        "mapping_version": catalog.ACTIVITY_POI_MAPPING_VERSION,
+    })
+    pd.DataFrame([row], columns=catalog.POI_COLUMNS).to_csv(tmp_path / "activity_pois_000_001.csv", index=False)
+    pd.DataFrame(columns=catalog.POI_COLUMNS).to_csv(tmp_path / "activity_pois_001_002.csv", index=False)
+
+    matching = catalog.activity_poi_chunk_status(2, graph_fingerprint="graph_a")
+    assert matching["covered_fsa_count"] == 2
+    assert matching["complete"] is True
+
+    mismatched = catalog.activity_poi_chunk_status(2, graph_fingerprint="graph_b")
+    assert mismatched["covered_fsa_count"] == 1
+    assert mismatched["complete"] is False
+    assert mismatched["missing_fsa_ranges"] == [[0, 1]]
+
+
 def test_osm_feature_normalization_maps_categories_to_activity_types():
     from activity_poi_catalog import normalize_osm_features
 

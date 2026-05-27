@@ -746,7 +746,15 @@ V1 is complete when:
 
 - Implemented `backend/intraday_activity_model.py` as an opt-in `MobilityConfig.itinerary_model="intraday"` planner.
 - Implemented `backend/activity_poi_catalog.py` and `data_preparation/fetch_activity_pois.py` for OSM POI acquisition, FSA/node attraction caches, deterministic zone-proxy fallback, and cache coverage metadata.
-- Limited OSM smoke fetch is working, but the current local POI cache is marked `complete: false` because it only covers `1/260` FSAs. `activity_poi_source="auto"` therefore ignores it and uses zone-proxy attractions until the full GTA POI fetch completes.
+- Limited OSM smoke fetch is working, but the current local POI cache is marked `complete: false` because it only covers part of the 260-FSA GTA set. `activity_poi_source="auto"` therefore ignores it and uses zone-proxy attractions until the full GTA POI fetch completes.
+- The acquisition CLI is resumable by global FSA chunk. Useful commands:
+
+```bash
+.venv/bin/python data_preparation/fetch_activity_pois.py --road-graph-source osm --status-only
+.venv/bin/python data_preparation/fetch_activity_pois.py --source osm --road-graph-source osm --chunk-size 1 --max-fsas 25 --request-timeout 90 --status
+.venv/bin/python data_preparation/fetch_activity_pois.py --road-graph-source osm --aggregate-only --status
+```
+
 - Charging simulation now preserves the activity-day label through SoC/charging delays, so after-midnight returns still close the correct activity day while road/load aggregation continues to use absolute timestamps.
 - Real-grid intraday smoke validation passed: `PYTHONPATH=backend .venv/bin/python data_preparation/run_model_validation.py --real-grid --itinerary-model intraday --activity-poi-source auto --observed-targets --repeat-week --num-people 300 --seeds 101 202 303 --validation-jobs 1 --out-dir backend/data/validation/intraday_real_grid_smoke_after_activity_metadata` produced seed pass rate `100%` and broken gate count `0`.
 

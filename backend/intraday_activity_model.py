@@ -238,7 +238,7 @@ class IntradayActivityModel:
                     break
 
         if current_activity != "home" and current_time < 168.0:
-            forced = self._forced_home_candidate(current_idx, home_idx, current_time, day_end)
+            forced = self._forced_home_candidate(current_idx, home_idx, current_time, day_end, current_activity)
             if forced is not None:
                 rows.append(self._leg_row(person, day, day_type, current_idx, current_activity, forced, current_time))
 
@@ -418,12 +418,16 @@ class IntradayActivityModel:
         return_time = self.road_network.travel_time_h(dest_idx, home_idx, return_depart, route=route)
         return return_depart + return_time <= day_end
 
-    def _forced_home_candidate(self, current_idx: int, home_idx: int, current_time: float, day_end: float) -> ActivityCandidate | None:
+    def _forced_home_candidate(self, current_idx: int, home_idx: int, current_time: float, day_end: float, current_activity: str) -> ActivityCandidate | None:
         route = self.road_network.route(current_idx, home_idx)
         if not route.reachable:
             return None
-        depart_abs = current_time + 0.25
+        min_dwell = MIN_DWELL_H.get(current_activity, 0.25)
+        depart_abs = current_time + min_dwell
         duration = self.road_network.travel_time_h(current_idx, home_idx, depart_abs, route=route)
+        if depart_abs + duration > day_end:
+            depart_abs = max(current_time, day_end - duration)
+            duration = self.road_network.travel_time_h(current_idx, home_idx, depart_abs, route=route)
         if depart_abs + duration > 168.0:
             return None
         return ActivityCandidate(

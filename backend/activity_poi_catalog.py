@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Iterable
+import re
+from typing import Callable, Iterable
 
 import geopandas as gpd
 import numpy as np
@@ -33,6 +34,7 @@ ACTIVITY_NODE_ATTRACTIONS_CSV = CACHE_DIR / "activity_node_attractions.csv"
 ACTIVITY_POI_METADATA_JSON = CACHE_DIR / "activity_poi_metadata.json"
 ACTIVITY_POI_CACHE_SCHEMA_VERSION = 1
 ACTIVITY_POI_MAPPING_VERSION = 1
+ACTIVITY_POI_CHUNK_RE = re.compile(r"activity_pois_(\d{3})_(\d{3})\.csv$")
 
 ACTIVITY_TYPES = [
     "work",
@@ -203,6 +205,10 @@ def load_or_fetch_activity_pois(
     force_download: bool = False,
     chunk_size: int = 10,
     limit_fsas: int | None = None,
+    start_fsa: int | None = None,
+    stop_fsa: int | None = None,
+    request_timeout: int = 300,
+    progress: Callable[[str], None] | None = None,
 ) -> ActivityPOICatalog:
     """
     Load cached activity POIs or fetch OSM POIs when explicitly requested.
@@ -234,22 +240,21 @@ def load_or_fetch_activity_pois(
             force_download=force_download,
             chunk_size=chunk_size,
             limit_fsas=limit_fsas,
+            start_fsa=start_fsa,
+            stop_fsa=stop_fsa,
+            request_timeout=request_timeout,
+            progress=progress,
         )
-        fsa_attractions = aggregate_activity_fsa_attractions(fsa_gdf, pois)
-        node_attractions = aggregate_activity_node_attractions(pois)
-        fetch_fsa_count = min(max(int(limit_fsas), 0), expected_fsa_count) if limit_fsas is not None else expected_fsa_count
-        cache_metadata = {
-            "source": "osm",
-            "fsa_count": expected_fsa_count,
-            "fetch_fsa_count": int(fetch_fsa_count),
-            "limit_fsas": None if limit_fsas is None else int(limit_fsas),
-            "chunk_size": int(max(chunk_size, 1)),
-            "complete": limit_fsas is None,
-            "graph_fingerprint": _graph_fingerprint(road_network),
-            "road_graph_source": road_network.summary().source if road_network is not None else None,
-        }
-        _write_cache(pois, fsa_attractions, node_attractions, metadata=cache_metadata)
-        return ActivityPOICatalog(fsa_gdf=fsa_gdf.reset_index(drop=True).copy(), pois=pois, fsa_attractions=fsa_attractions, node_attractions=node_attractions, source="osm")
+        return rebuild_activity_poi_cache_from_chunks(
+            fsa_gdf,
+            road_network=road_network,
+            source="osm",
+            chunk_size=chunk_size,
+            limit_fsas=limit_fsas,
+            start_fsa=start_fsa,
+            stop_fsa=stop_fsa,
+            fetched_pois=pois,
+        )
 
     fsa_attractions = build_proxy_activity_fsa_attractions(fsa_gdf)
     return ActivityPOICatalog(
@@ -283,6 +288,10 @@ def fetch_osm_activity_pois_chunked(
     force_download: bool = False,
     chunk_size: int = 10,
     limit_fsas: int | None = None,
+    start_fsa: int | None = None,
+    stop_fsa: int | None = None,
+    request_timeout: int = 300,
+    progress: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """
     Fetch OSM POIs in FSA chunks and persist each chunk.
@@ -294,31 +303,41 @@ def fetch_osm_activity_pois_chunked(
 
     ox.settings.use_cache = True
     if hasattr(ox.settings, "requests_timeout"):
-        ox.settings.requests_timeout = 300
+        ox.settings.requests_timeout = int(max(request_timeout, 1))
 
-    fsa_gdf = fsa_gdf.to_crs(epsg=4326).reset_index(drop=True).copy()
-    fsa_gdf["fsa_idx"] = np.arange(len(fsa_gdf), dtype=int)
+    full_fsa_gdf = fsa_gdf.to_crs(epsg=4326).reset_index(drop=True).copy()
+    full_fsa_gdf["fsa_idx"] = np.arange(len(full_fsa_gdf), dtype=int)
+    start = 0 if start_fsa is None else max(int(start_fsa), 0)
+    stop = len(full_fsa_gdf) if stop_fsa is None else min(max(int(stop_fsa), 0), len(full_fsa_gdf))
     if limit_fsas is not None:
-        fsa_gdf = fsa_gdf.iloc[:max(int(limit_fsas), 0)].reset_index(drop=True)
-    if fsa_gdf.empty:
+        stop = min(stop, start + max(int(limit_fsas), 0))
+    if start >= stop:
         return pd.DataFrame(columns=POI_COLUMNS)
 
     chunk_size = max(int(chunk_size), 1)
+    graph_fingerprint = _graph_fingerprint(road_network)
     ACTIVITY_POI_CHUNK_DIR.mkdir(parents=True, exist_ok=True)
     chunks: list[pd.DataFrame] = []
-    for start in range(0, len(fsa_gdf), chunk_size):
-        stop = min(start + chunk_size, len(fsa_gdf))
-        chunk = fsa_gdf.iloc[start:stop].reset_index(drop=True)
-        chunk_path = ACTIVITY_POI_CHUNK_DIR / f"activity_pois_{start:03d}_{stop:03d}.csv"
-        if chunk_path.exists() and not force_download:
-            chunks.append(pd.read_csv(chunk_path))
+    for chunk_start in range(start, stop, chunk_size):
+        chunk_stop = min(chunk_start + chunk_size, stop)
+        chunk = full_fsa_gdf.iloc[chunk_start:chunk_stop].reset_index(drop=True)
+        chunk_path = _activity_poi_chunk_path(chunk_start, chunk_stop)
+        cached = _read_compatible_chunk(chunk_path, graph_fingerprint)
+        if cached is not None and not force_download:
+            if progress is not None:
+                progress(f"cached FSA chunk {chunk_start}:{chunk_stop} rows={len(cached)}")
+            chunks.append(cached)
             continue
 
+        if progress is not None:
+            progress(f"fetching FSA chunk {chunk_start}:{chunk_stop}")
         polygon = chunk.geometry.union_all()
         features = ox.features_from_polygon(polygon, OSM_TAGS)
         pois = normalize_osm_features(chunk, features, road_network=road_network)
-        pois["source_layer"] = pois["source_layer"].astype(str) + f":fsa_chunk_{start:03d}_{stop:03d}"
+        pois["source_layer"] = pois["source_layer"].astype(str) + f":fsa_chunk_{chunk_start:03d}_{chunk_stop:03d}"
         pois.to_csv(chunk_path, index=False)
+        if progress is not None:
+            progress(f"wrote FSA chunk {chunk_start}:{chunk_stop} rows={len(pois)}")
         chunks.append(pois)
 
     if not chunks:
@@ -328,6 +347,109 @@ def fetch_osm_activity_pois_chunked(
         return pd.DataFrame(columns=POI_COLUMNS)
     combined = _dedupe_pois(combined)
     return combined[POI_COLUMNS].reset_index(drop=True)
+
+
+def rebuild_activity_poi_cache_from_chunks(
+    fsa_gdf: gpd.GeoDataFrame,
+    *,
+    road_network: RoadNetwork | None = None,
+    source: str = "osm",
+    chunk_size: int | None = None,
+    limit_fsas: int | None = None,
+    start_fsa: int | None = None,
+    stop_fsa: int | None = None,
+    fetched_pois: pd.DataFrame | None = None,
+) -> ActivityPOICatalog:
+    graph_fingerprint = _graph_fingerprint(road_network)
+    pois = load_cached_activity_poi_chunks(len(fsa_gdf), graph_fingerprint=graph_fingerprint)
+    if pois.empty and fetched_pois is not None:
+        pois = fetched_pois.copy()
+    fsa_attractions = aggregate_activity_fsa_attractions(fsa_gdf, pois)
+    node_attractions = aggregate_activity_node_attractions(pois)
+    status = activity_poi_chunk_status(len(fsa_gdf), graph_fingerprint=graph_fingerprint)
+    cache_metadata = {
+        "source": source,
+        "fsa_count": int(len(fsa_gdf)),
+        "fetch_fsa_count": int(status["covered_fsa_count"]),
+        "missing_fsa_ranges": status["missing_fsa_ranges"],
+        "limit_fsas": None if limit_fsas is None else int(limit_fsas),
+        "start_fsa": None if start_fsa is None else int(start_fsa),
+        "stop_fsa": None if stop_fsa is None else int(stop_fsa),
+        "chunk_size": None if chunk_size is None else int(max(chunk_size, 1)),
+        "complete": bool(status["complete"]),
+        "graph_fingerprint": graph_fingerprint,
+        "road_graph_source": road_network.summary().source if road_network is not None else None,
+        "compatible_chunk_count": int(status["compatible_chunk_count"]),
+        "chunk_count": int(status["chunk_count"]),
+    }
+    _write_cache(pois, fsa_attractions, node_attractions, metadata=cache_metadata)
+    catalog_source = "cache" if status["complete"] else "osm_partial"
+    return ActivityPOICatalog(
+        fsa_gdf=fsa_gdf.reset_index(drop=True).copy(),
+        pois=pois,
+        fsa_attractions=fsa_attractions,
+        node_attractions=node_attractions,
+        source=catalog_source,
+    )
+
+
+def load_cached_activity_poi_chunks(fsa_count: int, *, graph_fingerprint: str | None = None) -> pd.DataFrame:
+    if not ACTIVITY_POI_CHUNK_DIR.exists():
+        return pd.DataFrame(columns=POI_COLUMNS)
+    frames = []
+    for path in sorted(ACTIVITY_POI_CHUNK_DIR.glob("activity_pois_*.csv")):
+        parsed = _parse_activity_poi_chunk_path(path)
+        if parsed is None:
+            continue
+        start, stop = parsed
+        if start < 0 or stop > int(fsa_count) or start >= stop:
+            continue
+        frame = _read_compatible_chunk(path, graph_fingerprint)
+        if frame is not None:
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=POI_COLUMNS)
+    combined = pd.concat(frames, ignore_index=True)
+    if combined.empty:
+        return pd.DataFrame(columns=POI_COLUMNS)
+    return _dedupe_pois(combined)[POI_COLUMNS].reset_index(drop=True)
+
+
+def activity_poi_chunk_status(fsa_count: int, *, graph_fingerprint: str | None = None) -> dict[str, object]:
+    covered = np.zeros(int(fsa_count), dtype=bool)
+    chunk_count = 0
+    compatible_count = 0
+    rows = []
+    if ACTIVITY_POI_CHUNK_DIR.exists():
+        for path in sorted(ACTIVITY_POI_CHUNK_DIR.glob("activity_pois_*.csv")):
+            parsed = _parse_activity_poi_chunk_path(path)
+            if parsed is None:
+                continue
+            start, stop = parsed
+            chunk_count += 1
+            frame = _read_compatible_chunk(path, graph_fingerprint)
+            compatible = frame is not None and 0 <= start < stop <= int(fsa_count)
+            if compatible:
+                compatible_count += 1
+                covered[start:stop] = True
+            rows.append({
+                "path": str(path),
+                "start_fsa": int(start),
+                "stop_fsa": int(stop),
+                "compatible": bool(compatible),
+                "rows": 0 if frame is None else int(len(frame)),
+            })
+    missing = _missing_ranges(covered)
+    return {
+        "fsa_count": int(fsa_count),
+        "covered_fsa_count": int(covered.sum()),
+        "missing_fsa_count": int((~covered).sum()),
+        "complete": bool(covered.all()) if len(covered) else False,
+        "missing_fsa_ranges": missing,
+        "chunk_count": int(chunk_count),
+        "compatible_chunk_count": int(compatible_count),
+        "chunks": rows,
+    }
 
 
 def normalize_osm_features(
@@ -541,6 +663,7 @@ def _cache_complete(expected_fsa_count: int | None = None) -> bool:
         schema_version = int(metadata.get("cache_schema_version", -1))
         mapping_version = int(metadata.get("mapping_version", -1))
         fsa_count = int(metadata.get("fsa_count", -1))
+        fetch_fsa_count = int(metadata.get("fetch_fsa_count", -1))
     except (TypeError, ValueError):
         return False
     if schema_version != ACTIVITY_POI_CACHE_SCHEMA_VERSION:
@@ -549,9 +672,9 @@ def _cache_complete(expected_fsa_count: int | None = None) -> bool:
         return False
     if not bool(metadata.get("complete")):
         return False
-    if metadata.get("limit_fsas") is not None:
-        return False
     if expected_fsa_count is not None and fsa_count != int(expected_fsa_count):
+        return False
+    if expected_fsa_count is not None and fetch_fsa_count < int(expected_fsa_count):
         return False
     return True
 
@@ -585,6 +708,56 @@ def _write_cache(
     if metadata:
         payload.update(metadata)
     ACTIVITY_POI_METADATA_JSON.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def activity_poi_cache_status(fsa_gdf: gpd.GeoDataFrame, road_network: RoadNetwork | None = None) -> dict[str, object]:
+    return activity_poi_chunk_status(len(fsa_gdf), graph_fingerprint=_graph_fingerprint(road_network))
+
+
+def _activity_poi_chunk_path(start: int, stop: int) -> Path:
+    return ACTIVITY_POI_CHUNK_DIR / f"activity_pois_{int(start):03d}_{int(stop):03d}.csv"
+
+
+def _parse_activity_poi_chunk_path(path: Path) -> tuple[int, int] | None:
+    match = ACTIVITY_POI_CHUNK_RE.match(path.name)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _read_compatible_chunk(path: Path, graph_fingerprint: str | None) -> pd.DataFrame | None:
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_csv(path)
+    except (OSError, pd.errors.EmptyDataError):
+        return None
+    if not set(POI_COLUMNS).issubset(frame.columns):
+        return None
+    frame = frame[POI_COLUMNS].copy()
+    if not frame.empty:
+        mapping_versions = pd.to_numeric(frame["mapping_version"], errors="coerce").dropna().astype(int).unique()
+        if len(mapping_versions) and set(mapping_versions) != {ACTIVITY_POI_MAPPING_VERSION}:
+            return None
+        if graph_fingerprint is not None:
+            fingerprints = set(str(value) for value in frame["graph_fingerprint"].dropna().unique())
+            if fingerprints and fingerprints != {str(graph_fingerprint)}:
+                return None
+    return frame
+
+
+def _missing_ranges(covered: np.ndarray) -> list[list[int]]:
+    ranges: list[list[int]] = []
+    start: int | None = None
+    for idx, is_covered in enumerate(covered.tolist()):
+        if not is_covered and start is None:
+            start = idx
+        elif is_covered and start is not None:
+            ranges.append([start, idx])
+            start = None
+    if start is not None:
+        ranges.append([start, int(len(covered))])
+    return ranges
 
 
 def _canonical_activity(activity_type: str) -> str:
