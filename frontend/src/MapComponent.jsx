@@ -59,6 +59,24 @@ const SVG_ICONS = {
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" style="filter: drop-shadow(2px 2px 0px #000);">
       <polygon points="13 2 3 14 12 14 11 22 21 10 12 10" fill="#fff" />
     </svg>
+  `,
+  retail: `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" style="filter: drop-shadow(2px 2px 0px #000);">
+      <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4H6z" fill="#fff" />
+      <path d="M3 6h18M16 10a4 4 0 0 1-8 0" />
+    </svg>
+  `,
+  transit: `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" style="filter: drop-shadow(2px 2px 0px #000);">
+      <rect x="4" y="3" width="16" height="16" rx="2" fill="#fff" />
+      <path d="M4 11h16M8 15h.01M16 15h.01M6 19l-2 2M18 19l2 2" />
+    </svg>
+  `,
+  residential: `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" style="filter: drop-shadow(2px 2px 0px #000);">
+      <rect x="3" y="2" width="18" height="20" fill="#fff" />
+      <path d="M7 6h2M7 10h2M7 14h2M7 18h2M15 6h2M15 10h2M15 14h2M15 18h2" />
+    </svg>
   `
 };
 
@@ -281,7 +299,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
                 key={`${row.fsa}-ev-${dotIdx}`}
                 center={center}
                 radius={2}
-                pathOptions={{ color: '#000', fillColor: '#000', fillOpacity: 0.8, weight: 1 }}
+                pathOptions={{ color: '#000', fillColor: '#000', fillOpacity: 0.8, weight: 1, pane: 'markerPane' }}
               />
             );
           });
@@ -448,6 +466,24 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span dangerouslySetInnerHTML={{ __html: SVG_ICONS.chargers.replace('width="24" height="24"', 'width="18" height="18"') }} style={{ display: 'flex', alignItems: 'center' }} />
                 <span>Charger Station</span>
+              </div>
+            )}
+            {poiFilters.retail && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span dangerouslySetInnerHTML={{ __html: SVG_ICONS.retail.replace('width="24" height="24"', 'width="18" height="18"') }} style={{ display: 'flex', alignItems: 'center' }} />
+                <span>Retail & Mall</span>
+              </div>
+            )}
+            {poiFilters.transit && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span dangerouslySetInnerHTML={{ __html: SVG_ICONS.transit.replace('width="24" height="24"', 'width="18" height="18"') }} style={{ display: 'flex', alignItems: 'center' }} />
+                <span>Transit Hub</span>
+              </div>
+            )}
+            {poiFilters.residential && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span dangerouslySetInnerHTML={{ __html: SVG_ICONS.residential.replace('width="24" height="24"', 'width="18" height="18"') }} style={{ display: 'flex', alignItems: 'center' }} />
+                <span>Residential (Apartments)</span>
               </div>
             )}
           </div>

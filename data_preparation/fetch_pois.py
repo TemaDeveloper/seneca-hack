@@ -35,8 +35,21 @@ def main():
       node["leisure"="fitness_centre"]["name"]({bbox});
       node["office"]["name"]({bbox});
       node["amenity"="charging_station"]({bbox});
+      
+      node["amenity"="mall"]["name"]({bbox});
+      way["amenity"="mall"]["name"]({bbox});
+      node["shop"="supermarket"]["name"]({bbox});
+      way["shop"="supermarket"]["name"]({bbox});
+      
+      node["amenity"="bus_station"]["name"]({bbox});
+      way["amenity"="bus_station"]["name"]({bbox});
+      node["railway"="station"]["name"]({bbox});
+      way["railway"="station"]["name"]({bbox});
+      
+      node["building"="apartments"]["name"]({bbox});
+      way["building"="apartments"]["name"]({bbox});
     );
-    out body;
+    out center;
     """
     
     print("Fetching POI data from OpenStreetMap Overpass API (this may take a few seconds)...")
@@ -58,8 +71,8 @@ def main():
     # 3. Parse elements
     poi_list = []
     for el in elements:
-        lat = el.get("lat")
-        lon = el.get("lon")
+        lat = el.get("lat") or el.get("center", {}).get("lat")
+        lon = el.get("lon") or el.get("center", {}).get("lon")
         if lat is None or lon is None:
             continue
             
@@ -89,12 +102,21 @@ def main():
                 operator = tags.get("operator", "Public EV Charger")
                 network = tags.get("network", "")
                 name = f"{operator} {network}".strip() or "EV Charging Station"
+        elif tags.get("amenity") == "mall" or tags.get("shop") == "supermarket":
+            poi_type = "retail"
+            icon = "🛍️"
+        elif tags.get("amenity") == "bus_station" or tags.get("railway") == "station":
+            poi_type = "transit"
+            icon = "🚉"
+        elif tags.get("building") == "apartments":
+            poi_type = "residential"
+            icon = "🏢"
                 
         if not poi_type or not name:
             continue
             
         poi_list.append({
-            "id": f"node/{el['id']}",
+            "id": f"{el['type']}/{el['id']}",
             "type": poi_type,
             "icon": icon,
             "name": name,
@@ -122,10 +144,11 @@ def main():
     
     # Cap categories to prevent UI lag while maintaining realistic density
     dfs = []
-    for t in ["hospitals", "schools", "gyms", "workplaces", "chargers"]:
+    categories = ["hospitals", "schools", "gyms", "workplaces", "chargers", "retail", "transit", "residential"]
+    for t in categories:
         sub = output_df[output_df["type"] == t]
-        if len(sub) > 300:
-            sub = sub.sample(n=300, random_state=42)
+        if len(sub) > 150:
+            sub = sub.sample(n=150, random_state=42)
         dfs.append(sub)
     output_df = pd.concat(dfs)
     

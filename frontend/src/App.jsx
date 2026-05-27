@@ -30,7 +30,10 @@ function App() {
     workplaces: true,
     schools: true,
     gyms: true,
-    chargers: true
+    chargers: true,
+    retail: true,
+    transit: true,
+    residential: true
   });
 
   const isInitialMount = useRef(true);
@@ -320,6 +323,33 @@ function App() {
                         onChange={e => setPoiFilters({ ...poiFilters, chargers: e.target.checked })}
                       />
                       <label htmlFor="poiCharger" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>⚡ Existing Chargers</label>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="poiRetail"
+                        checked={poiFilters.retail}
+                        onChange={e => setPoiFilters({ ...poiFilters, retail: e.target.checked })}
+                      />
+                      <label htmlFor="poiRetail" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🛍️ Malls & Retail</label>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="poiTransit"
+                        checked={poiFilters.transit}
+                        onChange={e => setPoiFilters({ ...poiFilters, transit: e.target.checked })}
+                      />
+                      <label htmlFor="poiTransit" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🚉 Transit Hubs</label>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="poiResidential"
+                        checked={poiFilters.residential}
+                        onChange={e => setPoiFilters({ ...poiFilters, residential: e.target.checked })}
+                      />
+                      <label htmlFor="poiResidential" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🏢 Residential</label>
                     </div>
                   </div>
                 )}
