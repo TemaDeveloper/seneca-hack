@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from charger_catalog import AFDC_CHARGERS_CSV, OSM_CHARGERS_CSV
+from activity_poi_catalog import ACTIVITY_FSA_ATTRACTIONS_CSV, ACTIVITY_NODE_ATTRACTIONS_CSV, ACTIVITY_POI_METADATA_JSON, ACTIVITY_POIS_CSV
 from mobility_simulator import MobilityConfig
 from spatial_assembler import load_enriched_geodataframe
 from model_calibration import evaluate_config, fit_config, selected_candidate_indices
@@ -173,6 +174,10 @@ def _cache_file_metadata() -> dict[str, dict[str, object]]:
         "fsa_edge_template_cache": FSA_EDGE_TEMPLATE_CACHE,
         "afdc_chargers": AFDC_CHARGERS_CSV,
         "osm_chargers": OSM_CHARGERS_CSV,
+        "activity_pois": ACTIVITY_POIS_CSV,
+        "activity_fsa_attractions": ACTIVITY_FSA_ATTRACTIONS_CSV,
+        "activity_node_attractions": ACTIVITY_NODE_ATTRACTIONS_CSV,
+        "activity_poi_metadata": ACTIVITY_POI_METADATA_JSON,
     }
     pickle_headers = {"osm_route_cache", "fsa_route_cache", "osm_edge_template_cache", "fsa_edge_template_cache"}
     metadata: dict[str, dict[str, object]] = {}
@@ -269,6 +274,9 @@ def main() -> None:
         help=f"Share of observed FSA population represented by simulated people when --population-scale-grid is used. Default: vehicle population proxy {default_cfg.vehicle_population_share:.2f}.",
     )
     parser.add_argument("--real-grid", action="store_true", help="Require cached OSM road graph and real AFDC/OSM chargers.")
+    parser.add_argument("--itinerary-model", choices=["template", "intraday"], default="template", help="Weekly route planner to validate.")
+    parser.add_argument("--activity-poi-source", choices=["auto", "cache", "osm", "none"], default="auto", help="Activity POI attraction source for intraday routes.")
+    parser.add_argument("--force-activity-pois", action="store_true", help="Re-fetch activity POIs when --activity-poi-source=osm.")
     parser.add_argument("--observed-targets", action="store_true", help="Validate against available observed/proxy data artifacts.")
     parser.add_argument("--repeat-week", action="store_true", help="Replay the sampled week from final SoC to validate repeated-week SoC stability.")
     parser.add_argument("--require-sample-evidence", action="store_true", help="Break strict validation when rare-event gates do not have enough sampled events.")
@@ -314,6 +322,9 @@ def main() -> None:
         vehicle_population_share=population_share,
         road_graph_source="osm" if args.real_grid else "auto",
         charger_source="afdc" if args.real_grid else "auto",
+        itinerary_model=args.itinerary_model,
+        activity_poi_source=args.activity_poi_source,
+        force_activity_poi_download=args.force_activity_pois,
     )
     opts = ValidationOptions(
         require_real_grid=args.real_grid,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
+import os
 import sys
 
 import numpy as np
@@ -62,6 +63,8 @@ def validate_weekly_simulation(
     rows: list[dict[str, object]] = []
     _hackathon_data_mapping_checks(rows, engine)
     _road_graph_checks(rows, engine, itinerary, edge_flows, opts)
+    if getattr(cfg, "itinerary_model", "template") == "intraday":
+        _intraday_route_plan_checks(rows, people, itinerary)
     _mobility_checks(rows, people, legs)
     _purpose_zone_alignment_checks(rows, legs, opts)
     _charging_checks(rows, cfg, people, legs, charges, opts)
@@ -247,7 +250,13 @@ def _should_parallelize(jobs: int, seeds: tuple[int, ...]) -> bool:
     if jobs <= 1 or len(seeds) <= 1:
         return False
     main_file = getattr(sys.modules.get("__main__"), "__file__", "")
-    return bool(main_file) and not str(main_file).startswith("<")
+    if not (bool(main_file) and not str(main_file).startswith("<")):
+        return False
+    try:
+        os.sysconf("SC_SEM_NSEMS_MAX")
+    except (OSError, ValueError, PermissionError):
+        return False
+    return True
 
 
 def _sensitivity_report_from_metrics(metrics_df: pd.DataFrame) -> pd.DataFrame:
@@ -589,7 +598,10 @@ PURPOSE_ZONE_ALIGNMENT: dict[str, tuple[set[str], float, int]] = {
     "work": ({"office_park", "retail_hub", "transit_hub"}, 0.50, 50),
     "school": ({"residential", "office_park", "leisure"}, 0.75, 30),
     "retail": ({"retail_hub", "transit_hub", "office_park"}, 0.30, 50),
+    "restaurant": ({"retail_hub", "leisure", "office_park", "transit_hub"}, 0.35, 30),
+    "bar_nightlife": ({"retail_hub", "leisure", "transit_hub"}, 0.35, 15),
     "leisure": ({"leisure", "retail_hub", "residential"}, 0.75, 50),
+    "errand": ({"retail_hub", "residential", "office_park"}, 0.45, 30),
     "transit_hub": ({"transit_hub", "retail_hub", "office_park"}, 0.40, 30),
 }
 
@@ -621,6 +633,97 @@ def _purpose_zone_alignment_checks(rows: list[dict[str, object]], itinerary: pd.
             aligned >= threshold,
             f"sample={sample}, threshold={threshold:.2f}, allowed={sorted(allowed_zones)}",
         )
+
+
+def _intraday_route_plan_checks(rows: list[dict[str, object]], people: pd.DataFrame, itinerary: pd.DataFrame) -> None:
+    required = {
+        "person_id", "day", "origin_idx", "dest_idx", "origin_activity", "dest_type",
+        "depart_hour_abs", "arrival_hour_abs", "planned_arrival_hour_abs",
+        "schedule_delay_min", "dwell_before_h", "route_km", "travel_time_h",
+        "reachable_route",
+    }
+    if itinerary.empty:
+        _add(rows, "intraday_plan", "intraday_itinerary_nonempty", 0, False, "")
+        return
+    missing = sorted(required - set(itinerary.columns))
+    _add(rows, "intraday_plan", "intraday_required_columns", len(missing) == 0, len(missing) == 0, missing)
+    if missing:
+        return
+
+    ordered = itinerary.sort_values(["person_id", "depart_hour_abs"]).copy()
+    depart = pd.to_numeric(ordered["depart_hour_abs"], errors="coerce")
+    arrival = pd.to_numeric(ordered["arrival_hour_abs"], errors="coerce")
+    travel = pd.to_numeric(ordered["travel_time_h"], errors="coerce")
+    dwell = pd.to_numeric(ordered["dwell_before_h"], errors="coerce")
+    route_km = pd.to_numeric(ordered["route_km"], errors="coerce")
+    time_bounds = bool((depart >= 0).all() and (arrival >= depart).all() and (arrival <= 168.0).all())
+    duration_error_min = float(((arrival - depart - travel).abs() * 60.0).max()) if len(ordered) else 0.0
+    home_closed = ordered.groupby(["person_id", "day"]).tail(1)
+    home_closure = float((home_closed["dest_type"] == "home").mean()) if len(home_closed) else 0.0
+    first_by_day = ordered.groupby(["person_id", "day"]).head(1)
+    person_home = people.set_index("person_id")["home_idx"] if "home_idx" in people else pd.Series(dtype=float)
+    first_home_match = first_by_day.apply(lambda row: int(row["origin_idx"]) == int(person_home.get(row["person_id"], -999)), axis=1)
+    first_home_pct = float(first_home_match.mean()) if len(first_home_match) else 0.0
+    continuity_ok = _intraday_continuity_ok(ordered)
+    stop_counts = ordered.groupby(["person_id", "day"]).size()
+    stop_count_unique = int(stop_counts.nunique()) if len(stop_counts) else 0
+    work_arrivals = ordered[ordered["dest_type"] == "work"]["arrival_hour_abs"] % 24
+    school_arrivals = ordered[ordered["dest_type"] == "school"]["arrival_hour_abs"] % 24
+    work_after_19_pct = float((work_arrivals > 19.0).mean() * 100.0) if len(work_arrivals) else 0.0
+    school_after_12_pct = float((school_arrivals > 12.0).mean() * 100.0) if len(school_arrivals) else 0.0
+    retail_after_21_pct = float(((ordered[ordered["dest_type"] == "retail"]["arrival_hour_abs"] % 24) > 21.0).mean() * 100.0) if (ordered["dest_type"] == "retail").any() else 0.0
+    bar_rows = ordered[ordered["dest_type"] == "bar_nightlife"]
+    bar_late_valid = _bar_returns_before_activity_cutoff(ordered) if len(bar_rows) else True
+    route_p50 = float(route_km.median())
+    route_p90 = float(route_km.quantile(0.90))
+    leg_counts = ordered.groupby("person_id").size().reindex(people["person_id"], fill_value=0)
+    weekly_km = ordered.groupby("person_id")["route_km"].sum().reindex(people["person_id"], fill_value=0)
+    work_repeat = _repeat_destination_share(ordered, "work")
+    school_repeat = _repeat_destination_share(ordered, "school")
+
+    _add(rows, "intraday_plan", "intraday_time_bounds", bool(time_bounds), bool(time_bounds), "")
+    _add(rows, "intraday_plan", "intraday_duration_consistency_max_min", round(duration_error_min, 4), duration_error_min <= 0.08, "")
+    _add(rows, "intraday_plan", "intraday_nonnegative_dwell", bool((dwell >= -1e-9).all()), bool((dwell >= -1e-9).all()), "")
+    _add(rows, "intraday_plan", "intraday_active_day_home_closure_pct", round(home_closure * 100.0, 3), home_closure >= 0.995, "")
+    _add(rows, "intraday_plan", "intraday_first_leg_starts_home_pct", round(first_home_pct * 100.0, 3), first_home_pct >= 0.995, "")
+    _add(rows, "intraday_plan", "intraday_leg_continuity", bool(continuity_ok), bool(continuity_ok), "")
+    _add(rows, "intraday_plan", "intraday_stop_count_variety", stop_count_unique, stop_count_unique >= 3, "")
+    _add(rows, "intraday_plan", "intraday_legs_per_person_week_median", round(float(leg_counts.median()), 2), 9 <= leg_counts.median() <= 18, "")
+    _add(rows, "intraday_plan", "intraday_weekly_km_person_median", round(float(weekly_km.median()), 2), 120 <= weekly_km.median() <= 380, "")
+    _add(rows, "intraday_plan", "intraday_route_km_p50_p90", f"{route_p50:.2f}/{route_p90:.2f}", 4 <= route_p50 <= 28 and 25 <= route_p90 <= 100, "")
+    _add(rows, "intraday_plan", "intraday_work_after_19_pct", round(work_after_19_pct, 3), work_after_19_pct <= 1.0, "")
+    _add(rows, "intraday_plan", "intraday_school_after_12_pct", round(school_after_12_pct, 3), school_after_12_pct <= 1.0, "")
+    _add(rows, "intraday_plan", "intraday_retail_after_21_pct", round(retail_after_21_pct, 3), retail_after_21_pct <= 10.0, "")
+    _add(rows, "intraday_plan", "intraday_bar_returns_before_4am", bool(bar_late_valid), bool(bar_late_valid), "")
+    _add(rows, "intraday_plan", "intraday_work_destination_repeatability_pct", round(work_repeat * 100, 2), work_repeat >= 0.90, "")
+    _add(rows, "intraday_plan", "intraday_school_destination_repeatability_pct", round(school_repeat * 100, 2), school_repeat >= 0.90, "")
+
+
+def _intraday_continuity_ok(ordered: pd.DataFrame) -> bool:
+    for _, trips in ordered.groupby("person_id", sort=False):
+        dest = trips["dest_idx"].to_numpy(dtype=int)
+        origin = trips["origin_idx"].to_numpy(dtype=int)
+        if len(trips) > 1 and not bool((origin[1:] == dest[:-1]).all()):
+            return False
+        if bool((trips["depart_hour_abs"].to_numpy()[1:] + 1e-9 < trips["arrival_hour_abs"].to_numpy()[:-1]).any()):
+            return False
+    return True
+
+
+def _bar_returns_before_activity_cutoff(ordered: pd.DataFrame) -> bool:
+    for _, trips in ordered.groupby("person_id", sort=False):
+        trips = trips.sort_values("depart_hour_abs").reset_index(drop=True)
+        for idx, row in trips[trips["dest_type"] == "bar_nightlife"].iterrows():
+            later = trips.iloc[idx + 1:]
+            home = later[later["dest_type"] == "home"]
+            if home.empty:
+                return False
+            arrival = float(home.iloc[0]["arrival_hour_abs"])
+            service_start = np.floor((float(row["depart_hour_abs"]) - 4.0) / 24.0) * 24.0 + 4.0
+            cutoff = min(service_start + 24.0, 168.0)
+            if arrival > cutoff + 1e-9:
+                return False
+    return True
 
 
 def _charger_concentration_checks(
@@ -785,7 +888,7 @@ def _mobility_checks(rows: list[dict[str, object]], people: pd.DataFrame, itiner
     weekday_am = itinerary[(itinerary["day"] < 5) & (itinerary["depart_hour_abs"] % 24 <= 10.5)]
     weekday_am_work_school = float(weekday_am["dest_type"].isin(["work", "school"]).mean()) if len(weekday_am) else 0.0
     weekend = itinerary[itinerary["day"] >= 5]
-    weekend_retail_leisure = float(weekend["dest_type"].isin(["retail", "leisure", "home"]).mean()) if len(weekend) else 0.0
+    weekend_retail_leisure = float(weekend["dest_type"].isin(["retail", "restaurant", "bar_nightlife", "leisure", "errand", "home"]).mean()) if len(weekend) else 0.0
     transit_share_pct = float((itinerary["dest_type"] == "transit_hub").mean() * 100.0)
     other_share_pct = float((itinerary["dest_type"] == "other").mean() * 100.0)
     work_repeat = _repeat_destination_share(itinerary, "work")

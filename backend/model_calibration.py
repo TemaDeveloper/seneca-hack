@@ -12,6 +12,7 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from itertools import product
+import os
 from pathlib import Path
 import sys
 
@@ -473,7 +474,13 @@ def _record_fit_progress(
 
 def _can_spawn_process_pool() -> bool:
     main_path = Path(sys.argv[0])
-    return bool(sys.argv[0]) and sys.argv[0] not in {"-", "-c", "<stdin>"} and main_path.exists()
+    if not (bool(sys.argv[0]) and sys.argv[0] not in {"-", "-c", "<stdin>"} and main_path.exists()):
+        return False
+    try:
+        os.sysconf("SC_SEM_NSEMS_MAX")
+    except (OSError, ValueError, PermissionError):
+        return False
+    return True
 
 
 def extract_fit_metrics(artifacts: dict[str, pd.DataFrame], config: MobilityConfig) -> dict[str, float]:

@@ -26,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ev-probability", type=float, default=0.20)
     parser.add_argument("--real-grid", action="store_true")
     parser.add_argument("--edge-flow-detail", choices=["fsa", "full"], default="fsa")
+    parser.add_argument("--itinerary-model", choices=["template", "intraday"], default="template")
+    parser.add_argument("--activity-poi-source", choices=["auto", "cache", "osm", "none"], default="auto")
     parser.add_argument("--max-seconds", type=float, default=None, help="Fail if total runtime exceeds this threshold.")
     parser.add_argument("--output-json", type=Path, default=None, help="Optional path for the benchmark JSON payload.")
     return parser
@@ -73,6 +75,8 @@ def _command_args_payload(args: argparse.Namespace) -> dict[str, object]:
         "ev_probability": float(args.ev_probability),
         "real_grid": bool(args.real_grid),
         "edge_flow_detail": str(args.edge_flow_detail),
+        "itinerary_model": str(args.itinerary_model),
+        "activity_poi_source": str(args.activity_poi_source),
         "max_seconds": None if args.max_seconds is None else float(args.max_seconds),
         "output_json": None if args.output_json is None else str(args.output_json),
     }
@@ -83,6 +87,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, object]:
         ev_probability=args.ev_probability,
         road_graph_source="osm" if args.real_grid else "auto",
         charger_source="afdc" if args.real_grid else "auto",
+        itinerary_model=args.itinerary_model,
+        activity_poi_source=args.activity_poi_source,
     )
     engine = MobilitySimulationEngine(cfg)
     started = time.perf_counter()

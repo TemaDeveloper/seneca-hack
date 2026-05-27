@@ -19,6 +19,14 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from activity_poi_catalog import (
+    ACTIVITY_FSA_ATTRACTIONS_CSV,
+    ACTIVITY_NODE_ATTRACTIONS_CSV,
+    ACTIVITY_POI_METADATA_JSON,
+    ACTIVITY_POIS_CSV,
+    ActivityPOICatalog,
+    load_or_fetch_activity_pois,
+)
 from charger_catalog import AFDC_CHARGERS_CSV, OSM_CHARGERS_CSV, ChargerCatalog, ChargerChoice
 from spatial_assembler import FSA_GEOJSON, FSA_POPULATION_CSV, ZONE_CSV, load_enriched_geodataframe
 from monte_carlo import CHARGER_POWER_KW, float_to_time
@@ -71,6 +79,11 @@ class MobilityConfig:
     force_osm_download: bool = False
     charger_source: str = "auto"
     force_charger_download: bool = False
+    itinerary_model: str = "template"
+    activity_poi_source: str = "auto"
+    force_activity_poi_download: bool = False
+    activity_day_start_hour: float = 4.0
+    max_stops_per_activity_day: int = 6
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,7 @@ class _StaticMobilityContext:
     distance_km: np.ndarray
     road_network: RoadNetwork
     charger_catalog: ChargerCatalog
+    activity_poi_catalog: ActivityPOICatalog
     route_km: np.ndarray
     freeflow_time_h: np.ndarray
 
@@ -350,6 +364,12 @@ class MobilitySimulationEngine:
             force_osm_download=self.config.force_charger_download,
         )
         self.charger_catalog.snap_to_road_network(self.road_network)
+        self.activity_poi_catalog = load_or_fetch_activity_pois(
+            self.base_gdf,
+            road_network=self.road_network,
+            source=self.config.activity_poi_source,
+            force_download=self.config.force_activity_poi_download,
+        )
         self.route_km = self.road_network.route_km
         self.freeflow_time_h = self.road_network.freeflow_time_h
         self._prepare_behavior_caches()
@@ -358,11 +378,12 @@ class MobilitySimulationEngine:
 
     @staticmethod
     def _static_context_cache_key(config: MobilityConfig) -> tuple[object, ...] | None:
-        if config.force_osm_download or config.force_charger_download:
+        if config.force_osm_download or config.force_charger_download or config.force_activity_poi_download:
             return None
         return (
             str(config.road_graph_source),
             str(config.charger_source),
+            str(config.activity_poi_source),
             _file_signature([
                 Path(FSA_GEOJSON),
                 Path(ZONE_CSV),
@@ -374,6 +395,10 @@ class MobilitySimulationEngine:
                 FSA_ROUTE_CACHE,
                 AFDC_CHARGERS_CSV,
                 OSM_CHARGERS_CSV,
+                ACTIVITY_POIS_CSV,
+                ACTIVITY_FSA_ATTRACTIONS_CSV,
+                ACTIVITY_NODE_ATTRACTIONS_CSV,
+                ACTIVITY_POI_METADATA_JSON,
             ]),
         )
 
@@ -388,6 +413,7 @@ class MobilitySimulationEngine:
             distance_km=self.distance_km,
             road_network=self.road_network,
             charger_catalog=self.charger_catalog,
+            activity_poi_catalog=self.activity_poi_catalog,
             route_km=self.route_km,
             freeflow_time_h=self.freeflow_time_h,
         )
@@ -402,6 +428,7 @@ class MobilitySimulationEngine:
         self.distance_km = context.distance_km
         self.road_network = context.road_network
         self.charger_catalog = context.charger_catalog
+        self.activity_poi_catalog = context.activity_poi_catalog
         self.route_km = context.route_km
         self.freeflow_time_h = context.freeflow_time_h
 
@@ -677,6 +704,19 @@ class MobilitySimulationEngine:
             "school_idx": school_idx,
         })
 
+        if str(cfg.itinerary_model) == "intraday":
+            from intraday_activity_model import IntradayActivityModel
+
+            planner = IntradayActivityModel(
+                self,
+                self.activity_poi_catalog,
+                activity_day_start_hour=cfg.activity_day_start_hour,
+                max_stops_per_activity_day=cfg.max_stops_per_activity_day,
+            )
+            return people, planner.generate_weekly_itinerary(people, rng)
+        if str(cfg.itinerary_model) != "template":
+            raise ValueError("itinerary_model must be 'template' or 'intraday'.")
+
         legs: list[dict] = []
         for person_i in range(num_people):
             current_idx = int(home_idx[person_i])
@@ -901,9 +941,10 @@ class MobilitySimulationEngine:
                         else 0.0
                     )
                     row = dict(adjusted_leg)
+                    activity_day = int(row.get("day", min(6, depart_abs // 24)))
                     row.update({
-                        "day": int(min(6, depart_abs // 24)),
-                        "day_type": "weekday" if int(min(6, depart_abs // 24)) < 5 else "weekend",
+                        "day": activity_day,
+                        "day_type": str(row.get("day_type", "weekday" if activity_day < 5 else "weekend")),
                         "arrival_hour_abs": arrival_abs,
                         "schedule_delay_min": round(schedule_delay_min, 3),
                         "soc_before": np.nan,
@@ -956,9 +997,10 @@ class MobilitySimulationEngine:
                     else 0.0
                 )
                 row = dict(adjusted_leg)
+                activity_day = int(row.get("day", min(6, depart_abs // 24)))
                 row.update({
-                    "day": int(min(6, depart_abs // 24)),
-                    "day_type": "weekday" if int(min(6, depart_abs // 24)) < 5 else "weekend",
+                    "day": activity_day,
+                    "day_type": str(row.get("day_type", "weekday" if activity_day < 5 else "weekend")),
                     "arrival_hour_abs": arrival_abs,
                     "schedule_delay_min": round(schedule_delay_min, 3),
                     "soc_before": round(soc_before, 3),

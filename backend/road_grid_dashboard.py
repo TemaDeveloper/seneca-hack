@@ -73,6 +73,8 @@ def run_weekly_road_grid_simulation(
     require_real_grid: bool = True,
     batch_size: int | None = None,
     edge_flow_detail: Literal["full", "fsa"] = "full",
+    itinerary_model: Literal["template", "intraday"] = "template",
+    activity_poi_source: Literal["auto", "cache", "osm", "none"] = "auto",
 ) -> RoadGridSimulationResult:
     """
     Run the end-to-end weekly road-grid model and return dashboard artifacts.
@@ -87,6 +89,8 @@ def run_weekly_road_grid_simulation(
         grid_ev_load_scale=float(grid_ev_load_scale),
         road_graph_source="osm" if require_real_grid else "auto",
         charger_source="afdc" if require_real_grid else "auto",
+        itinerary_model=itinerary_model,
+        activity_poi_source=activity_poi_source,
     )
     engine = MobilitySimulationEngine(cfg)
     use_batched = batch_size is not None and int(num_people) > int(batch_size)
