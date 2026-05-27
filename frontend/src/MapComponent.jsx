@@ -142,6 +142,19 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
     return lookup;
   }, [showPois, zoomLevel, realPois, poiFilters]);
 
+  // Index all POIs by FSA for static, drift-free EV dot positioning (decoupled from UI overlays/filters)
+  const staticPoisByFsa = useMemo(() => {
+    if (!realPois) return {};
+    const lookup = {};
+    realPois.forEach(poi => {
+      if (!lookup[poi.fsa]) {
+        lookup[poi.fsa] = [];
+      }
+      lookup[poi.fsa].push(poi);
+    });
+    return lookup;
+  }, [realPois]);
+
   const getStyle = (feature) => {
     const fsa = feature.properties.fsa;
     const dataRow = gridMap[fsa];
@@ -274,14 +287,17 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
           if (!row.centroid_lat || !row.centroid_lon) return null;
           const numDots = Math.min(50, Math.floor((row.peak_ev_load_kw || 0) / 70)) || 0;
 
-          const fsaPois = activePoisByFsa[row.fsa] || [];
+          const fsaPois = staticPoisByFsa[row.fsa] || [];
           const hasLocalPois = fsaPois.length > 0;
 
           return Array.from({ length: numDots }).map((_, dotIdx) => {
             const seed = idx * 1000 + dotIdx;
             let center;
 
-            if (hasLocalPois) {
+            // 30% of dots scatter around the FSA centroid; the rest cluster around POIs (if available and zoomed in)
+            const shouldScatter = (zoomLevel < 12) || (dotIdx % 10 < 3) || !hasLocalPois;
+
+            if (!shouldScatter) {
               // Cluster around a deterministic active POI in this FSA
               const poi = fsaPois[dotIdx % fsaPois.length];
               // Very tight clustering (approx 50m radius) for realistic parking lot feel
@@ -289,7 +305,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
               const lonJitter = (pseudoRandom(seed + 10) - 0.5) * 0.0012;
               center = [poi.lat + latJitter, poi.lon + lonJitter];
             } else {
-              // Scatter around centroid (zoomed out or POIs disabled)
+              // Scatter around centroid
               const latJitter = (pseudoRandom(seed) - 0.5) * 0.04;
               const lonJitter = (pseudoRandom(seed + 10) - 0.5) * 0.04;
               center = [row.centroid_lat + latJitter, row.centroid_lon + lonJitter];
