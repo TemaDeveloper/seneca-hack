@@ -1,15 +1,9 @@
-# Frontend Review Fixes
+# EV Grid Planner Tasks
 
-## P0 — Critical
-- [x] Make temperature & time_of_day sliders affect mock backend output
-- [x] Add React ErrorBoundary to main.jsx
+## Legend Updates
+- [x] Add "1 dot = 15 EV" description to the map legend overlay in `MapComponent.jsx` when EV dots are active (showCars).
+- [x] Verify that the updated legend is correctly styled and rendered.
 
-## P1 — Important
-- [x] Fix `handleAddCustom` state mutation bug
-- [x] Fix `index.html` title to project name
-- [x] Delete dead `App.css` (unused Vite scaffold)
-- [x] Fix GeoJSON key to include simulation version (stale map data)
-
-## P2 — Polish
-- [x] Replace `alert()` with inline error state
-- [x] Improve loading overlay with spinner animation
+## Review
+- **Result**: Successfully added the legend notation `1 dot = 15 EV` alongside a black dot marker preview in the map legend overlay. It only renders when `showCars` is enabled and the current layer is `demand`.
+- **Validation**: Frontend successfully built with `npm run build` showing no compilation errors.

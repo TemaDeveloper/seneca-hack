@@ -50,7 +50,9 @@ body {
   margin-bottom: 32px;
 }
 
-h1, h2, h3 {
+h1,
+h2,
+h3 {
   margin-top: 0;
   font-weight: 800;
   text-transform: uppercase;
@@ -74,7 +76,9 @@ input[type="range"] {
   accent-color: var(--accent-color);
 }
 
-input[type="text"], input[type="number"], select {
+input[type="text"],
+input[type="number"],
+select {
   padding: 8px;
   border: 2px solid var(--border-color);
   font-family: 'Inter', sans-serif;
@@ -155,7 +159,8 @@ table {
   background: var(--bg-panel);
 }
 
-th, td {
+th,
+td {
   padding: 12px;
   text-align: left;
   border-bottom: 2px solid var(--border-color);
@@ -176,8 +181,11 @@ tr:hover {
 
 .loading-overlay {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(255,255,255,0.85);
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -205,7 +213,9 @@ tr:hover {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .error-banner {
@@ -237,3 +247,7 @@ tr:hover {
   box-shadow: 4px 4px 0px var(--border-color);
 }
 
+.custom-poi-icon {
+  background: none !important;
+  border: none !important;
+}
