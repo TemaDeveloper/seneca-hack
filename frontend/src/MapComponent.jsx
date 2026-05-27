@@ -106,6 +106,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
   const [geoJsonData, setGeoJsonData] = useState(null);
   const [realPois, setRealPois] = useState([]);
   const [zoomLevel, setZoomLevel] = useState(10);
+  const [legendCollapsed, setLegendCollapsed] = useState(false);
 
   useEffect(() => {
     fetch('/gta_fsa_boundaries.geojson')
@@ -389,8 +390,39 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
         display: 'flex',
         flexDirection: 'column',
         gap: '8px',
-        minWidth: '150px'
+        minWidth: '150px',
+        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+        transform: legendCollapsed ? 'translateX(calc(100% + 40px))' : 'translateX(0)'
       }}>
+        {/* Brutalist Collapse Button Tab */}
+        <button
+          onClick={() => setLegendCollapsed(!legendCollapsed)}
+          style={{
+            position: 'absolute',
+            left: '-42px',
+            top: '-3px',
+            width: '40px',
+            height: '40px',
+            backgroundColor: '#fff',
+            border: '3px solid #000',
+            borderRight: 'none',
+            boxShadow: legendCollapsed ? '-4px 4px 0px #000' : 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            zIndex: 1001,
+            outline: 'none',
+            transition: 'background-color 0.2s'
+          }}
+          title={legendCollapsed ? "Show Legend" : "Hide Legend"}
+          onMouseEnter={(e) => e.target.style.backgroundColor = '#f0f0f0'}
+          onMouseLeave={(e) => e.target.style.backgroundColor = '#fff'}
+        >
+          {legendCollapsed ? '📜' : '✕'}
+        </button>
         <h4 style={{ margin: '0 0 4px 0', textTransform: 'uppercase', fontWeight: 800, borderBottom: '2px solid #000', paddingBottom: '4px' }}>Legend</h4>
 
         {layer === 'demand' ? (
