@@ -21,6 +21,9 @@ from typing import Callable, Iterable
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import requests
+from shapely import from_wkt
+from shapely.geometry import Point
 
 from road_network import RoadNetwork
 
@@ -28,6 +31,8 @@ from road_network import RoadNetwork
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CACHE_DIR = DATA_DIR / "cache"
 ACTIVITY_POI_CHUNK_DIR = CACHE_DIR / "activity_poi_chunks"
+ACTIVITY_OSM_PBF = CACHE_DIR / "ontario-latest.osm.pbf"
+ACTIVITY_OSM_PBF_URL = "https://download.geofabrik.de/north-america/canada/ontario-latest.osm.pbf"
 ACTIVITY_POIS_CSV = CACHE_DIR / "activity_pois.csv"
 ACTIVITY_FSA_ATTRACTIONS_CSV = CACHE_DIR / "activity_fsa_attractions.csv"
 ACTIVITY_NODE_ATTRACTIONS_CSV = CACHE_DIR / "activity_node_attractions.csv"
@@ -207,19 +212,23 @@ def load_or_fetch_activity_pois(
     limit_fsas: int | None = None,
     start_fsa: int | None = None,
     stop_fsa: int | None = None,
+    pbf_path: Path | str | None = None,
     request_timeout: int = 300,
+    overpass_url: str | None = None,
+    continue_on_error: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> ActivityPOICatalog:
     """
     Load cached activity POIs or fetch OSM POIs when explicitly requested.
 
     `source="auto"` uses cache when available and otherwise returns the
-    deterministic FSA proxy. It does not hit Overpass unexpectedly.
-    `source="osm"` is the explicit network path.
+    deterministic FSA proxy. It does not hit Overpass or download PBFs
+    unexpectedly. `source="osm"` is the explicit Overpass path, and
+    `source="pbf"` parses a local OpenStreetMap extract.
     """
     source = str(source)
-    if source not in {"auto", "cache", "osm", "none"}:
-        raise ValueError("activity POI source must be one of auto/cache/osm/none")
+    if source not in {"auto", "cache", "osm", "pbf", "none"}:
+        raise ValueError("activity POI source must be one of auto/cache/osm/pbf/none")
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     expected_fsa_count = int(len(fsa_gdf))
@@ -243,6 +252,8 @@ def load_or_fetch_activity_pois(
             start_fsa=start_fsa,
             stop_fsa=stop_fsa,
             request_timeout=request_timeout,
+            overpass_url=overpass_url,
+            continue_on_error=continue_on_error,
             progress=progress,
         )
         return rebuild_activity_poi_cache_from_chunks(
@@ -255,6 +266,35 @@ def load_or_fetch_activity_pois(
             stop_fsa=stop_fsa,
             fetched_pois=pois,
         )
+    if source == "pbf":
+        path = Path(pbf_path) if pbf_path is not None else ACTIVITY_OSM_PBF
+        pois = fetch_pbf_activity_pois(
+            fsa_gdf,
+            path,
+            road_network=road_network,
+            progress=progress,
+        )
+        fsa_attractions = aggregate_activity_fsa_attractions(fsa_gdf, pois)
+        node_attractions = aggregate_activity_node_attractions(pois)
+        cache_metadata = {
+            "source": "pbf",
+            "pbf_path": str(path),
+            "pbf_fingerprint": _path_fingerprint(path),
+            "fsa_count": expected_fsa_count,
+            "fetch_fsa_count": expected_fsa_count,
+            "missing_fsa_ranges": [],
+            "limit_fsas": None,
+            "start_fsa": None,
+            "stop_fsa": None,
+            "chunk_size": None,
+            "complete": True,
+            "graph_fingerprint": _graph_fingerprint(road_network),
+            "road_graph_source": road_network.summary().source if road_network is not None else None,
+            "compatible_chunk_count": None,
+            "chunk_count": None,
+        }
+        _write_cache(pois, fsa_attractions, node_attractions, metadata=cache_metadata)
+        return ActivityPOICatalog(fsa_gdf=fsa_gdf.reset_index(drop=True).copy(), pois=pois, fsa_attractions=fsa_attractions, node_attractions=node_attractions, source="pbf")
 
     fsa_attractions = build_proxy_activity_fsa_attractions(fsa_gdf)
     return ActivityPOICatalog(
@@ -291,6 +331,8 @@ def fetch_osm_activity_pois_chunked(
     start_fsa: int | None = None,
     stop_fsa: int | None = None,
     request_timeout: int = 300,
+    overpass_url: str | None = None,
+    continue_on_error: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """
@@ -304,6 +346,8 @@ def fetch_osm_activity_pois_chunked(
     ox.settings.use_cache = True
     if hasattr(ox.settings, "requests_timeout"):
         ox.settings.requests_timeout = int(max(request_timeout, 1))
+    if overpass_url:
+        ox.settings.overpass_url = str(overpass_url).rstrip("/")
 
     full_fsa_gdf = fsa_gdf.to_crs(epsg=4326).reset_index(drop=True).copy()
     full_fsa_gdf["fsa_idx"] = np.arange(len(full_fsa_gdf), dtype=int)
@@ -332,7 +376,14 @@ def fetch_osm_activity_pois_chunked(
         if progress is not None:
             progress(f"fetching FSA chunk {chunk_start}:{chunk_stop}")
         polygon = chunk.geometry.union_all()
-        features = ox.features_from_polygon(polygon, OSM_TAGS)
+        try:
+            features = ox.features_from_polygon(polygon, OSM_TAGS)
+        except Exception as exc:
+            if progress is not None:
+                progress(f"failed FSA chunk {chunk_start}:{chunk_stop}: {type(exc).__name__}: {exc}")
+            if continue_on_error:
+                continue
+            raise
         pois = normalize_osm_features(chunk, features, road_network=road_network)
         pois["source_layer"] = pois["source_layer"].astype(str) + f":fsa_chunk_{chunk_start:03d}_{chunk_stop:03d}"
         pois.to_csv(chunk_path, index=False)
@@ -450,6 +501,207 @@ def activity_poi_chunk_status(fsa_count: int, *, graph_fingerprint: str | None =
         "compatible_chunk_count": int(compatible_count),
         "chunks": rows,
     }
+
+
+def download_activity_osm_pbf(
+    *,
+    url: str = ACTIVITY_OSM_PBF_URL,
+    path: Path | str = ACTIVITY_OSM_PBF,
+    progress: Callable[[str], None] | None = None,
+) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    headers = {}
+    mode = "wb"
+    existing = path.stat().st_size if path.exists() else 0
+    if existing > 0:
+        headers["Range"] = f"bytes={existing}-"
+        mode = "ab"
+    with requests.get(url, stream=True, timeout=60, headers=headers) as response:
+        if response.status_code == 416 and existing > 0:
+            if progress is not None:
+                progress(f"pbf ready {path} size={existing / (1024 ** 2):.1f} MiB")
+            return path
+        if response.status_code == 200 and existing and "Range" in headers:
+            mode = "wb"
+            existing = 0
+        response.raise_for_status()
+        total_raw = response.headers.get("content-length")
+        total = (int(total_raw) + existing) if total_raw and str(total_raw).isdigit() else None
+        downloaded = existing
+        next_report = downloaded
+        with path.open(mode) as handle:
+            for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                downloaded += len(chunk)
+                if progress is not None and downloaded - next_report >= 64 * 1024 * 1024:
+                    if total:
+                        progress(f"downloaded {downloaded / (1024 ** 2):.1f}/{total / (1024 ** 2):.1f} MiB")
+                    else:
+                        progress(f"downloaded {downloaded / (1024 ** 2):.1f} MiB")
+                    next_report = downloaded
+    if progress is not None:
+        progress(f"pbf ready {path} size={path.stat().st_size / (1024 ** 2):.1f} MiB")
+    return path
+
+
+def fetch_pbf_activity_pois(
+    fsa_gdf: gpd.GeoDataFrame,
+    pbf_path: Path | str,
+    *,
+    road_network: RoadNetwork | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> pd.DataFrame:
+    try:
+        import osmium
+        import osmium.geom
+    except ImportError as exc:
+        raise ImportError("Install osmium to parse local OSM PBF activity POIs.") from exc
+
+    pbf_path = Path(pbf_path)
+    if not pbf_path.exists():
+        raise FileNotFoundError(f"OSM PBF not found: {pbf_path}")
+
+    fsa = fsa_gdf.to_crs(epsg=4326).reset_index(drop=True).copy()
+    fsa["fsa_idx"] = np.arange(len(fsa), dtype=int)
+    minx, miny, maxx, maxy = fsa.total_bounds
+    bbox = (float(minx), float(miny), float(maxx), float(maxy))
+    source_fingerprint = _path_fingerprint(pbf_path)
+    graph_fingerprint = _graph_fingerprint(road_network)
+
+    class Handler(osmium.SimpleHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rows: list[dict[str, object]] = []
+            self.wkt_factory = osmium.geom.WKTFactory()
+
+        def node(self, obj) -> None:
+            tags = _tags_to_dict(obj.tags)
+            activity, subtype = _activity_from_osm_row(tags)
+            if activity is None or not obj.location.valid():
+                return
+            lon = float(obj.location.lon)
+            lat = float(obj.location.lat)
+            if not _point_in_bbox(lon, lat, bbox):
+                return
+            self.rows.append(_pbf_candidate_row(
+                source_id=str(obj.id),
+                source_layer="osm_pbf_node",
+                tags=tags,
+                activity=activity,
+                subtype=subtype,
+                point=Point(lon, lat),
+                geometry_wkt=f"POINT ({lon} {lat})",
+                area_m2=0.0,
+                source_fingerprint=source_fingerprint,
+                graph_fingerprint=graph_fingerprint,
+            ))
+
+        def way(self, obj) -> None:
+            if obj.is_closed():
+                return
+            tags = _tags_to_dict(obj.tags)
+            activity, subtype = _activity_from_osm_row(tags)
+            if activity is None:
+                return
+            try:
+                geometry = from_wkt(self.wkt_factory.create_linestring(obj))
+            except Exception:
+                return
+            point = geometry.representative_point()
+            if not _point_in_bbox(float(point.x), float(point.y), bbox):
+                return
+            self.rows.append(_pbf_candidate_row(
+                source_id=str(obj.id),
+                source_layer="osm_pbf_way",
+                tags=tags,
+                activity=activity,
+                subtype=subtype,
+                point=point,
+                geometry_wkt=geometry.wkt,
+                area_m2=0.0,
+                source_fingerprint=source_fingerprint,
+                graph_fingerprint=graph_fingerprint,
+            ))
+
+        def area(self, obj) -> None:
+            tags = _tags_to_dict(obj.tags)
+            activity, subtype = _activity_from_osm_row(tags)
+            if activity is None:
+                return
+            try:
+                geometry = from_wkt(self.wkt_factory.create_multipolygon(obj))
+            except Exception:
+                return
+            point = geometry.representative_point()
+            if not _point_in_bbox(float(point.x), float(point.y), bbox):
+                return
+            self.rows.append(_pbf_candidate_row(
+                source_id=str(obj.id),
+                source_layer="osm_pbf_area",
+                tags=tags,
+                activity=activity,
+                subtype=subtype,
+                point=point,
+                geometry_wkt=geometry.wkt,
+                area_m2=_geometry_area_m2(geometry),
+                source_fingerprint=source_fingerprint,
+                graph_fingerprint=graph_fingerprint,
+            ))
+
+    if progress is not None:
+        progress(f"parsing OSM PBF {pbf_path}")
+    handler = Handler()
+    handler.apply_file(str(pbf_path), locations=True, idx="flex_mem")
+    if progress is not None:
+        progress(f"parsed {len(handler.rows)} candidate OSM features inside GTA bbox")
+    if not handler.rows:
+        return pd.DataFrame(columns=POI_COLUMNS)
+
+    candidates = gpd.GeoDataFrame(handler.rows, geometry="point", crs="EPSG:4326")
+    fsa_lookup = fsa[["fsa", "zone_type", "fsa_idx", "geometry"]].copy()
+    joined = gpd.sjoin(candidates, fsa_lookup, predicate="within", how="inner").reset_index(drop=True)
+    rows = []
+    for output_idx, row in joined.iterrows():
+        point = row["point"]
+        area_m2 = float(row["area_m2"])
+        weight = _poi_weight(str(row["activity_type"]), str(row["activity_subtype"]), area_m2)
+        rows.append({
+            "poi_id": f"PBF_{output_idx:08d}",
+            "source": "osm_pbf",
+            "source_id": str(row["source_id"]),
+            "source_layer": str(row["source_layer"]),
+            "name": str(row.get("name", "") or ""),
+            "raw_tags_json": str(row["raw_tags_json"]),
+            "activity_type": str(row["activity_type"]),
+            "activity_subtype": str(row["activity_subtype"]),
+            "lat": float(point.y),
+            "lon": float(point.x),
+            "geometry_wkt": str(row["geometry_wkt"]),
+            "area_m2": area_m2,
+            "weight": weight,
+            "capacity_proxy": max(area_m2, weight),
+            "confidence": float(row["confidence"]),
+            "fsa": str(row["fsa"]),
+            "fsa_idx": int(row["fsa_idx"]),
+            "zone_type": str(row["zone_type"]),
+            "road_node_id": pd.NA,
+            "road_snap_distance_m": np.nan,
+            "snap_status": "unsnapped",
+            "dedupe_key": _dedupe_key(str(row["activity_type"]), str(row.get("name", "") or ""), float(point.y), float(point.x)),
+            "source_fingerprint": source_fingerprint,
+            "graph_fingerprint": graph_fingerprint,
+            "mapping_version": ACTIVITY_POI_MAPPING_VERSION,
+        })
+    pois = pd.DataFrame(rows, columns=POI_COLUMNS)
+    pois = _dedupe_pois(pois)
+    if road_network is not None:
+        pois = snap_pois_to_road(pois, road_network)
+    if progress is not None:
+        progress(f"mapped {len(pois)} activity POIs to GTA FSAs")
+    return pois[POI_COLUMNS].reset_index(drop=True)
 
 
 def normalize_osm_features(
@@ -672,6 +924,10 @@ def _cache_complete(expected_fsa_count: int | None = None) -> bool:
         return False
     if not bool(metadata.get("complete")):
         return False
+    if metadata.get("limit_fsas") is not None:
+        return False
+    if metadata.get("missing_fsa_ranges") not in (None, []):
+        return False
     if expected_fsa_count is not None and fsa_count != int(expected_fsa_count):
         return False
     if expected_fsa_count is not None and fetch_fsa_count < int(expected_fsa_count):
@@ -690,6 +946,12 @@ def _write_cache(
     pois.to_csv(ACTIVITY_POIS_CSV, index=False)
     fsa_attractions.to_csv(ACTIVITY_FSA_ATTRACTIONS_CSV, index=False)
     node_attractions.to_csv(ACTIVITY_NODE_ATTRACTIONS_CSV, index=False)
+    if "activity_type" in fsa_attractions:
+        activity_values = fsa_attractions["activity_type"]
+    elif "activity_type" in pois:
+        activity_values = pois["activity_type"]
+    else:
+        activity_values = pd.Series(dtype=object)
     payload: dict[str, object] = {
         "cache_schema_version": ACTIVITY_POI_CACHE_SCHEMA_VERSION,
         "mapping_version": ACTIVITY_POI_MAPPING_VERSION,
@@ -702,7 +964,7 @@ def _write_cache(
         "poi_count": int(len(pois)),
         "fsa_attraction_rows": int(len(fsa_attractions)),
         "node_attraction_rows": int(len(node_attractions)),
-        "activity_types": sorted(str(value) for value in pois["activity_type"].dropna().unique()) if "activity_type" in pois else [],
+        "activity_types": sorted(str(value) for value in activity_values.dropna().unique()),
         "written_utc": datetime.now(timezone.utc).isoformat(),
     }
     if metadata:
@@ -801,6 +1063,44 @@ def _activity_from_osm_row(row: pd.Series) -> tuple[str | None, str]:
     return None, ""
 
 
+def _tags_to_dict(tags: object) -> dict[str, object]:
+    return {str(tag.k): str(tag.v) for tag in tags}
+
+
+def _point_in_bbox(lon: float, lat: float, bbox: tuple[float, float, float, float]) -> bool:
+    minx, miny, maxx, maxy = bbox
+    return minx <= lon <= maxx and miny <= lat <= maxy
+
+
+def _pbf_candidate_row(
+    *,
+    source_id: str,
+    source_layer: str,
+    tags: dict[str, object],
+    activity: str,
+    subtype: str,
+    point: Point,
+    geometry_wkt: str,
+    area_m2: float,
+    source_fingerprint: str,
+    graph_fingerprint: str,
+) -> dict[str, object]:
+    return {
+        "source_id": source_id,
+        "source_layer": source_layer,
+        "name": str(tags.get("name", "") or ""),
+        "raw_tags_json": json.dumps({key: value for key, value in tags.items() if key in OSM_TAGS or key == "name"}, sort_keys=True),
+        "activity_type": activity,
+        "activity_subtype": subtype,
+        "point": point,
+        "geometry_wkt": geometry_wkt,
+        "area_m2": float(max(area_m2, 0.0)),
+        "confidence": 0.78 if area_m2 > 0 else 0.62,
+        "source_fingerprint": source_fingerprint,
+        "graph_fingerprint": graph_fingerprint,
+    }
+
+
 def _geometry_area_m2(geometry: object) -> float:
     if geometry is None:
         return 0.0
@@ -855,6 +1155,14 @@ def _graph_fingerprint(road_network: RoadNetwork | None) -> str:
         return ""
     summary = road_network.summary()
     payload = f"{summary.source}:{summary.node_count}:{summary.edge_count}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _path_fingerprint(path: Path) -> str:
+    if not path.exists():
+        return ""
+    stat = path.stat()
+    payload = f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 

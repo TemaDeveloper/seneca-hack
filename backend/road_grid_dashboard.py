@@ -74,7 +74,7 @@ def run_weekly_road_grid_simulation(
     batch_size: int | None = None,
     edge_flow_detail: Literal["full", "fsa"] = "full",
     itinerary_model: Literal["template", "intraday"] = "template",
-    activity_poi_source: Literal["auto", "cache", "osm", "none"] = "auto",
+    activity_poi_source: Literal["auto", "cache", "osm", "pbf", "none"] = "auto",
 ) -> RoadGridSimulationResult:
     """
     Run the end-to-end weekly road-grid model and return dashboard artifacts.

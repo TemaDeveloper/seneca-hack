@@ -1,8 +1,9 @@
 """
 Fetch/cache activity POIs used by the intraday route planner.
 
-This script explicitly hits OSM/Overpass. Normal simulator runs use the cache
-when present and otherwise fall back to deterministic FSA-level proxy weights.
+This script explicitly parses OSM PBF extracts or hits OSM/Overpass. Normal
+simulator runs use the cache when present and otherwise fall back to
+deterministic FSA-level proxy weights.
 
 Run:
     PYTHONPATH=backend uv run python data_preparation/fetch_activity_pois.py
@@ -23,10 +24,13 @@ if str(BACKEND) not in sys.path:
 from activity_poi_catalog import (  # noqa: E402
     ACTIVITY_FSA_ATTRACTIONS_CSV,
     ACTIVITY_NODE_ATTRACTIONS_CSV,
+    ACTIVITY_OSM_PBF,
+    ACTIVITY_OSM_PBF_URL,
     ACTIVITY_POI_METADATA_JSON,
     ACTIVITY_POIS_CSV,
     activity_poi_cache_status,
     describe_required_external_data,
+    download_activity_osm_pbf,
     load_or_fetch_activity_pois,
     read_activity_poi_cache_metadata,
     rebuild_activity_poi_cache_from_chunks,
@@ -38,10 +42,15 @@ from spatial_assembler import load_enriched_geodataframe  # noqa: E402
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true", help="Re-download OSM POIs even if cache exists.")
-    parser.add_argument("--source", choices=["osm", "auto", "none", "cache"], default="osm")
+    parser.add_argument("--source", choices=["osm", "pbf", "auto", "none", "cache"], default="osm")
     parser.add_argument("--road-graph-source", choices=["auto", "osm", "fsa_adjacency"], default="auto")
+    parser.add_argument("--pbf-path", type=Path, default=ACTIVITY_OSM_PBF, help="Local OSM PBF path for --source pbf.")
+    parser.add_argument("--pbf-url", type=str, default=ACTIVITY_OSM_PBF_URL, help="OSM PBF download URL.")
+    parser.add_argument("--download-pbf", action="store_true", help="Download/resume the configured PBF before parsing it.")
     parser.add_argument("--chunk-size", type=int, default=10, help="Number of FSAs per resumable OSM fetch chunk.")
     parser.add_argument("--request-timeout", type=int, default=120, help="OSMnx/Overpass request timeout per chunk in seconds.")
+    parser.add_argument("--overpass-url", type=str, default=None, help="Override OSMnx Overpass base URL, e.g. https://overpass.kumi.systems/api.")
+    parser.add_argument("--continue-on-error", action="store_true", help="Skip failed chunks and keep fetching later chunks.")
     parser.add_argument("--limit-fsas", type=int, default=None, help="Fetch only the first N FSAs for smoke tests.")
     parser.add_argument("--start-fsa", type=int, default=None, help="Zero-based first FSA index to fetch.")
     parser.add_argument("--stop-fsa", type=int, default=None, help="Zero-based exclusive FSA index to fetch.")
@@ -62,6 +71,9 @@ def main() -> None:
         _print_status(activity_poi_cache_status(gdf, network))
     if args.status_only:
         return
+
+    if args.download_pbf:
+        download_activity_osm_pbf(url=args.pbf_url, path=args.pbf_path, progress=_progress)
 
     start_fsa = args.start_fsa
     stop_fsa = args.stop_fsa
@@ -96,8 +108,11 @@ def main() -> None:
             limit_fsas=args.limit_fsas,
             start_fsa=start_fsa,
             stop_fsa=stop_fsa,
+            pbf_path=args.pbf_path,
             request_timeout=args.request_timeout,
-            progress=_progress if args.source == "osm" else None,
+            overpass_url=args.overpass_url,
+            continue_on_error=args.continue_on_error,
+            progress=_progress if args.source in {"osm", "pbf"} else None,
         )
 
     print(f"Activity POI source: {catalog.source}")

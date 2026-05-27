@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-grid", action="store_true")
     parser.add_argument("--edge-flow-detail", choices=["fsa", "full"], default="fsa")
     parser.add_argument("--itinerary-model", choices=["template", "intraday"], default="template")
-    parser.add_argument("--activity-poi-source", choices=["auto", "cache", "osm", "none"], default="auto")
+    parser.add_argument("--activity-poi-source", choices=["auto", "cache", "osm", "pbf", "none"], default="auto")
     parser.add_argument("--max-seconds", type=float, default=None, help="Fail if total runtime exceeds this threshold.")
     parser.add_argument("--output-json", type=Path, default=None, help="Optional path for the benchmark JSON payload.")
     return parser

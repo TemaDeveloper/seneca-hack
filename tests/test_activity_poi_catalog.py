@@ -85,6 +85,22 @@ def test_activity_poi_cache_requires_complete_coverage_metadata(tmp_path, monkey
     assert catalog._cache_complete(len(gdf))
     assert catalog.load_or_fetch_activity_pois(gdf, source="cache").source == "cache"
 
+    catalog._write_cache(
+        pois,
+        fsa_attractions,
+        node_attractions,
+        metadata={"source": "osm", "fsa_count": len(gdf), "fetch_fsa_count": len(gdf), "limit_fsas": 1, "complete": True},
+    )
+    assert not catalog._cache_complete(len(gdf))
+
+    catalog._write_cache(
+        pois,
+        fsa_attractions,
+        node_attractions,
+        metadata={"source": "osm", "fsa_count": len(gdf), "fetch_fsa_count": len(gdf), "limit_fsas": None, "complete": True, "missing_fsa_ranges": [[1, 2]]},
+    )
+    assert not catalog._cache_complete(len(gdf))
+
 
 def test_activity_poi_chunk_status_filters_by_graph_fingerprint(tmp_path, monkeypatch):
     import activity_poi_catalog as catalog

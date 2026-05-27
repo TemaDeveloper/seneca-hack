@@ -317,6 +317,8 @@ Fallback if no POI layer exists:
 destination_attraction = current zone attraction * traffic attraction
 ```
 
+For real POI caches, each activity attraction vector is normalized within that activity before candidate scoring. Raw OSM count volume therefore chooses where a retail/restaurant/transit trip goes; it does not decide whether the person does retail instead of another purpose. Purpose-zone multipliers then keep concrete POI sampling aligned with the FSA taxonomy used by validation.
+
 ## Additional Data To Source
 
 The current repo is not enough for a defensible concrete-place model. It can support a coarse FSA-level mock, but concrete destination behavior needs external POI and land-use data.
@@ -325,7 +327,7 @@ Required new data:
 
 | Data | Purpose | Preferred source | Fallback |
 |---|---|---|---|
-| OSM POIs | GTA-wide activity attractions | OpenStreetMap via OSMnx/Overpass or downloaded extract | current FSA zone weights |
+| OSM POIs | GTA-wide activity attractions | OpenStreetMap via downloaded Geofabrik PBF parsed by `osmium`; Overpass chunk fetch as fallback | current FSA zone weights |
 | OSM land-use polygons | retail/commercial/industrial/leisure area weights | OpenStreetMap landuse/building tags | broad FSA zone classification |
 | schools | school anchors and attraction | municipal open data, Ontario school lists, OSM `amenity=school/college/university` | OSM only |
 | employment/commercial clusters | work anchors | municipal employment areas, zoning, business improvement areas, OSM office/commercial/industrial tags | FSA zone type + traffic counts |
@@ -472,14 +474,16 @@ node_attraction_rows
 activity_types
 graph_fingerprint
 road_graph_source
+pbf_path
+pbf_fingerprint
 written_utc
 ```
 
-`auto` and `cache` mode may only load the POI cache when this metadata says the cache is complete, has no `limit_fsas`, matches the current FSA count, and matches the current mapping/cache schema versions. Limited smoke fetches may write CSVs, but must not be treated as full GTA POI evidence.
+`auto` and `cache` mode may only load the POI cache when this metadata says the cache is complete, has no `limit_fsas`, has no missing FSA ranges, matches the current FSA count, and matches the current mapping/cache schema versions. Limited smoke fetches may write CSVs, but must not be treated as full GTA POI evidence.
 
 ## POI Processing Pipeline
 
-1. Fetch OSM POIs and land-use polygons for GTA FSA envelope.
+1. Parse a local Ontario/GTA OSM PBF extract, or fetch OSM POIs and land-use polygons for GTA FSA chunks through Overpass when PBF is unavailable.
 2. Optionally merge municipal open datasets by category.
 3. Normalize all geometries to EPSG:4326.
 4. Convert polygons to representative points while retaining area for weighting.
@@ -561,7 +565,7 @@ Add to `MobilityConfig`:
 
 ```text
 itinerary_model: "template" | "intraday"
-activity_poi_source: "auto" | "osm" | "cache" | "none"
+activity_poi_source: "auto" | "osm" | "pbf" | "cache" | "none"
 force_activity_poi_download: bool
 activity_day_start_hour: 4
 max_stops_per_activity_day: 6
@@ -745,18 +749,19 @@ V1 is complete when:
 ## Current Implementation Status
 
 - Implemented `backend/intraday_activity_model.py` as an opt-in `MobilityConfig.itinerary_model="intraday"` planner.
-- Implemented `backend/activity_poi_catalog.py` and `data_preparation/fetch_activity_pois.py` for OSM POI acquisition, FSA/node attraction caches, deterministic zone-proxy fallback, and cache coverage metadata.
-- Limited OSM smoke fetch is working, but the current local POI cache is marked `complete: false` because it only covers part of the 260-FSA GTA set. `activity_poi_source="auto"` therefore ignores it and uses zone-proxy attractions until the full GTA POI fetch completes.
-- The acquisition CLI is resumable by global FSA chunk. Useful commands:
+- Implemented `backend/activity_poi_catalog.py` and `data_preparation/fetch_activity_pois.py` for OSM POI acquisition, local PBF parsing, FSA/node attraction caches, deterministic zone-proxy fallback, and cache coverage metadata.
+- Current local activity cache is complete from the Geofabrik Ontario PBF: `260/260` hackathon FSAs, `148,585` mapped POIs, `2,340` FSA attraction rows, `62,014` snapped node-attraction rows, graph fingerprint `52ba7862fd1e7732`, PBF fingerprint `5e6911a3268e6d85`, and no missing FSA ranges. `activity_poi_source="auto"` now loads this cache on the current OSM graph.
+- The acquisition CLI supports both resumable Overpass FSA chunks and local PBF parsing. Useful commands:
 
 ```bash
 .venv/bin/python data_preparation/fetch_activity_pois.py --road-graph-source osm --status-only
+.venv/bin/python data_preparation/fetch_activity_pois.py --source pbf --road-graph-source osm --download-pbf --pbf-path backend/data/cache/ontario-latest.osm.pbf --status
 .venv/bin/python data_preparation/fetch_activity_pois.py --source osm --road-graph-source osm --chunk-size 1 --max-fsas 25 --request-timeout 90 --status
 .venv/bin/python data_preparation/fetch_activity_pois.py --road-graph-source osm --aggregate-only --status
 ```
 
 - Charging simulation now preserves the activity-day label through SoC/charging delays, so after-midnight returns still close the correct activity day while road/load aggregation continues to use absolute timestamps.
-- Real-grid intraday smoke validation passed: `PYTHONPATH=backend .venv/bin/python data_preparation/run_model_validation.py --real-grid --itinerary-model intraday --activity-poi-source auto --observed-targets --repeat-week --num-people 300 --seeds 101 202 303 --validation-jobs 1 --out-dir backend/data/validation/intraday_real_grid_smoke_after_activity_metadata` produced seed pass rate `100%` and broken gate count `0`.
+- Real-grid intraday validation with the complete PBF cache passed: `PYTHONPATH=backend .venv/bin/python data_preparation/run_model_validation.py --real-grid --itinerary-model intraday --activity-poi-source auto --observed-targets --repeat-week --num-people 500 --seeds 101 202 303 --validation-jobs 1 --out-dir backend/data/validation/intraday_real_grid_pbf_cache_500` produced seed pass rate `100%` and broken gate count `0`.
 
 ## Non-Goals For V1
 

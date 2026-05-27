@@ -99,6 +99,18 @@ SOFT_MAX_KM = {
     "home": 80.0,
 }
 
+DESTINATION_ZONE_MULTIPLIER = {
+    "work": {"residential": 0.55, "leisure": 0.85, "office_park": 3.2, "retail_hub": 2.6, "transit_hub": 2.0},
+    "school": {"residential": 1.15, "leisure": 1.2, "office_park": 1.2, "retail_hub": 0.75, "transit_hub": 0.5},
+    "retail": {"residential": 0.35, "leisure": 0.70, "office_park": 2.5, "retail_hub": 5.0, "transit_hub": 2.0},
+    "restaurant": {"residential": 0.40, "leisure": 3.0, "office_park": 2.0, "retail_hub": 4.5, "transit_hub": 2.0},
+    "bar_nightlife": {"residential": 0.25, "leisure": 4.0, "office_park": 0.8, "retail_hub": 4.0, "transit_hub": 2.5},
+    "leisure": {"residential": 1.1, "leisure": 3.0, "office_park": 0.65, "retail_hub": 1.8, "transit_hub": 1.0},
+    "errand": {"residential": 1.2, "leisure": 0.8, "office_park": 1.4, "retail_hub": 2.5, "transit_hub": 0.8},
+    "transit_hub": {"residential": 0.05, "leisure": 0.5, "office_park": 3.0, "retail_hub": 4.0, "transit_hub": 20.0},
+    "other": {"residential": 0.7, "leisure": 1.4, "office_park": 1.4, "retail_hub": 1.6, "transit_hub": 1.2},
+}
+
 
 @dataclass(frozen=True)
 class ActivityCandidate:
@@ -130,10 +142,18 @@ class IntradayActivityModel:
         self.zone_types = engine.zone_types
         self.road_network = engine.road_network
         self.route_km = engine.route_km
+        self._unit_zone_multiplier = np.ones(len(self.fsas), dtype=float)
         self._activity_vectors = {
-            activity: np.maximum(activity_catalog.attraction_vector(activity), 0.001)
+            activity: self._normalize_activity_vector(activity_catalog.attraction_vector(activity))
             for activity in ACTIVITIES
             if activity != "home"
+        }
+        self._zone_multiplier_vectors = {
+            activity: np.asarray(
+                [float(weights.get(str(zone), 1.0)) for zone in self.zone_types],
+                dtype=float,
+            )
+            for activity, weights in DESTINATION_ZONE_MULTIPLIER.items()
         }
 
     def generate_weekly_itinerary(self, people: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
@@ -146,6 +166,14 @@ class IntradayActivityModel:
 
             return pd.DataFrame(columns=ITINERARY_COLUMNS)
         return itinerary.sort_values(["person_id", "depart_hour_abs"]).reset_index(drop=True)
+
+    def _normalize_activity_vector(self, values: np.ndarray) -> np.ndarray:
+        vector = np.maximum(np.asarray(values, dtype=float), 0.001)
+        positive = vector[np.isfinite(vector) & (vector > 0)]
+        scale = float(np.median(positive)) if len(positive) else 1.0
+        if scale <= 0 or not np.isfinite(scale):
+            scale = 1.0
+        return vector / scale
 
     def plan_person_week(self, person: dict[str, object], rng: np.random.Generator) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
@@ -395,7 +423,7 @@ class IntradayActivityModel:
         vector = self._activity_vectors.get(activity)
         if vector is None:
             vector = np.ones(len(self.fsas), dtype=float)
-        attraction = vector * self._traffic_attraction(activity, clock_hour)
+        attraction = vector * self._traffic_attraction(activity, clock_hour) * self._zone_multiplier_vector(activity)
         route_km = self.route_km[int(current_idx)]
         distance = np.exp(-route_km / TAU_KM[activity])
         long_trip = np.exp(-np.maximum(route_km - SOFT_MAX_KM[activity], 0.0) / 8.0)
@@ -632,8 +660,8 @@ class IntradayActivityModel:
                 "bar_nightlife": 0.20,
                 "leisure": 0.85,
                 "errand": 0.85,
-                "transit_hub": 0.12,
-                "other": 0.18,
+                "transit_hub": 0.06,
+                "other": 0.42,
             }
         elif current_activity in {"work", "school"}:
             base = {
@@ -642,8 +670,8 @@ class IntradayActivityModel:
                 "bar_nightlife": 0.20,
                 "leisure": 0.55,
                 "errand": 0.35,
-                "transit_hub": 0.09,
-                "other": 0.12,
+                "transit_hub": 0.045,
+                "other": 0.30,
             }
         else:
             base = {
@@ -652,8 +680,8 @@ class IntradayActivityModel:
                 "bar_nightlife": 0.35,
                 "leisure": 0.45,
                 "errand": 0.15,
-                "transit_hub": 0.05,
-                "other": 0.08,
+                "transit_hub": 0.025,
+                "other": 0.24,
             }
         value = float(base.get(next_activity, 0.0))
         if day_type == "weekend" and next_activity in {"leisure", "restaurant", "bar_nightlife", "retail"}:
@@ -670,7 +698,18 @@ class IntradayActivityModel:
         vector = self._activity_vectors.get(activity)
         if vector is None:
             return 1.0
-        return float(max(vector[int(dest_idx)], 0.001))
+        zone_multiplier = self._zone_multiplier(activity, int(dest_idx))
+        return float(max(vector[int(dest_idx)] * zone_multiplier, 0.001))
+
+    def _zone_multiplier_vector(self, activity: str) -> np.ndarray:
+        vector = self._zone_multiplier_vectors.get(activity)
+        return self._unit_zone_multiplier if vector is None else vector
+
+    def _zone_multiplier(self, activity: str, dest_idx: int) -> float:
+        weights = DESTINATION_ZONE_MULTIPLIER.get(activity)
+        if not weights:
+            return 1.0
+        return float(weights.get(str(self.zone_types[int(dest_idx)]), 1.0))
 
     def _traffic_attraction(self, activity: str, clock_hour: int) -> np.ndarray:
         if activity == "home":
