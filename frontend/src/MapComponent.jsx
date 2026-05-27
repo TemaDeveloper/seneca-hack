@@ -377,7 +377,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
       {/* Map Legend Overlay */}
       <div style={{
         position: 'absolute',
-        bottom: '20px',
+        top: '20px',
         right: '20px',
         backgroundColor: '#fff',
         border: '3px solid #000',
