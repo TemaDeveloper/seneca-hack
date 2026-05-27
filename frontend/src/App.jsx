@@ -318,7 +318,13 @@ function App() {
                         checked={poiFilters.hospitals}
                         onChange={e => setPoiFilters({ ...poiFilters, hospitals: e.target.checked })}
                       />
-                      <label htmlFor="poiHospital" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🏥 Hospitals</label>
+                      <label htmlFor="poiHospital" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <rect x="3" y="3" width="18" height="18" fill="#fff" />
+                          <path d="M12 7v10M7 12h10" />
+                        </svg>
+                        <span>Hospitals</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -327,7 +333,13 @@ function App() {
                         checked={poiFilters.workplaces}
                         onChange={e => setPoiFilters({ ...poiFilters, workplaces: e.target.checked })}
                       />
-                      <label htmlFor="poiWork" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>💼 Workplaces</label>
+                      <label htmlFor="poiWork" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <rect x="3" y="7" width="18" height="14" fill="#fff" />
+                          <path d="M16 7V4H8v3" />
+                        </svg>
+                        <span>Workplaces</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -336,7 +348,13 @@ function App() {
                         checked={poiFilters.schools}
                         onChange={e => setPoiFilters({ ...poiFilters, schools: e.target.checked })}
                       />
-                      <label htmlFor="poiSchool" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🏫 Schools</label>
+                      <label htmlFor="poiSchool" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <polygon points="12 3 22 8 12 13 2 8" fill="#fff" />
+                          <path d="M6 10v6c0 2 3 3 6 3s6-1 6-3v-6" fill="#fff" />
+                        </svg>
+                        <span>Schools</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -345,7 +363,16 @@ function App() {
                         checked={poiFilters.gyms}
                         onChange={e => setPoiFilters({ ...poiFilters, gyms: e.target.checked })}
                       />
-                      <label htmlFor="poiGym" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🏋️ Gyms</label>
+                      <label htmlFor="poiGym" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="3" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <path d="M6 12h12" />
+                          <rect x="4" y="7" width="2" height="10" fill="#fff" />
+                          <rect x="18" y="7" width="2" height="10" fill="#fff" />
+                          <rect x="2" y="9" width="2" height="6" fill="#fff" />
+                          <rect x="20" y="9" width="2" height="6" fill="#fff" />
+                        </svg>
+                        <span>Gyms</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -354,7 +381,12 @@ function App() {
                         checked={poiFilters.chargers}
                         onChange={e => setPoiFilters({ ...poiFilters, chargers: e.target.checked })}
                       />
-                      <label htmlFor="poiCharger" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>⚡ Existing Chargers</label>
+                      <label htmlFor="poiCharger" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10" fill="#fff" />
+                        </svg>
+                        <span>Existing Chargers</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -363,7 +395,13 @@ function App() {
                         checked={poiFilters.retail}
                         onChange={e => setPoiFilters({ ...poiFilters, retail: e.target.checked })}
                       />
-                      <label htmlFor="poiRetail" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🛍️ Malls & Retail</label>
+                      <label htmlFor="poiRetail" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4H6z" fill="#fff" />
+                          <path d="M3 6h18M16 10a4 4 0 0 1-8 0" />
+                        </svg>
+                        <span>Malls & Retail</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -372,7 +410,13 @@ function App() {
                         checked={poiFilters.transit}
                         onChange={e => setPoiFilters({ ...poiFilters, transit: e.target.checked })}
                       />
-                      <label htmlFor="poiTransit" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🚉 Transit Hubs</label>
+                      <label htmlFor="poiTransit" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <rect x="4" y="3" width="16" height="16" rx="2" fill="#fff" />
+                          <path d="M4 11h16M8 15h.01M16 15h.01M6 19l-2 2M18 19l2 2" />
+                        </svg>
+                        <span>Transit Hubs</span>
+                      </label>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <input
@@ -381,7 +425,13 @@ function App() {
                         checked={poiFilters.residential}
                         onChange={e => setPoiFilters({ ...poiFilters, residential: e.target.checked })}
                       />
-                      <label htmlFor="poiResidential" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem' }}>🏢 Residential</label>
+                      <label htmlFor="poiResidential" style={{ margin: 0, cursor: 'pointer', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" style={{ filter: 'drop-shadow(1px 1px 0px #000)', flexShrink: 0 }}>
+                          <rect x="3" y="2" width="18" height="20" fill="#fff" />
+                          <path d="M7 6h2M7 10h2M7 14h2M7 18h2M15 6h2M15 10h2M15 14h2M15 18h2" />
+                        </svg>
+                        <span>Residential</span>
+                      </label>
                     </div>
                   </div>
                 )}

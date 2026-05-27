@@ -1,12 +1,14 @@
 # EV Grid Planner Tasks
 
-## Decouple EV Dot Positions & Add Spatial Distribution
-- [x] Implement `poisByFsa` in `MapComponent.jsx` to index all POIs by FSA independently of the `showPois` toggle and filter checkboxes.
-- [x] Update the EV dot positioning logic in `MapComponent.jsx` to use the static `poisByFsa` lookup.
-- [x] Refactor the coordinates generator so that 30% of the EV dots are always distributed around the FSA centroid, and 70% cluster around the local POIs.
+## Gaussian Distribution & SVG Sidebar Toggles
+- [x] Implement a `gaussianRandom` helper function in `MapComponent.jsx` using the Box-Muller transform.
+- [x] Refactor the tight POI clustering jitter in `MapComponent.jsx` to use the Gaussian distribution (focusing dots near the center of POIs).
+- [x] Refactor the broad FSA centroid scattering jitter in `MapComponent.jsx` to use the Gaussian distribution for a more organic population density spread.
+- [x] Replace emojis in the POI toggle checkboxes of `App.jsx` with clean inline vector SVGs that match the map markers.
 - [x] Verify that the frontend builds and works correctly.
 
 ## Review
-- **Decoupled Positions**: Shifted EV dot positions to index all POIs deterministically (via `staticPoisByFsa`). Their spatial positions are completely fixed and do not jump when the "Show POIs" checkbox or individual category filters are toggled.
-- **Percentage Distribution (30/70)**: Refactored dot coordinates rendering. When zoomed in, 30% of the EV dots scatter across the general FSA region (around the centroid), while the remaining 70% cluster tightly around POIs.
+- **Box-Muller Transform**: Added a deterministic Gaussian random variable generator to achieve a normal distribution.
+- **Organic Density Scatter**: Refactored the EV dots jitter. High-density zones concentrate dots tightly at center entrances of POIs ($\sigma \approx 30\text{m}$) and scatter them gracefully in general residential margins ($\sigma \approx 1\text{km}$), which looks highly realistic.
+- **Inline SVGs Toggles**: Replaced all emojis inside the `App.jsx` POI selection checkboxes with inline vector SVGs that match the map symbols.
 - **Verification**: Verified compilation successfully with `npm run build`.

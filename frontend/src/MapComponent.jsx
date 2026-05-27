@@ -26,6 +26,14 @@ function pseudoRandom(seed) {
   return x - Math.floor(x);
 }
 
+// Box-Muller transform to generate a standard normal random variable (mean=0, std=1)
+function gaussianRandom(seed1, seed2) {
+  let u1 = pseudoRandom(seed1);
+  let u2 = pseudoRandom(seed2);
+  if (u1 === 0) u1 = 0.0001; // Avoid 0 for Math.log
+  return Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+}
+
 // Crisp black-and-white SVGs for brutalist theme
 const SVG_ICONS = {
   hospitals: `
@@ -300,14 +308,15 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
             if (!shouldScatter) {
               // Cluster around a deterministic active POI in this FSA
               const poi = fsaPois[dotIdx % fsaPois.length];
-              // Very tight clustering (approx 50m radius) for realistic parking lot feel
-              const latJitter = (pseudoRandom(seed) - 0.5) * 0.0012;
-              const lonJitter = (pseudoRandom(seed + 10) - 0.5) * 0.0012;
+              // Gaussian normal distribution centered at the POI (standard deviation of ~30-40 meters)
+              const latJitter = gaussianRandom(seed, seed + 1) * 0.0004;
+              const lonJitter = gaussianRandom(seed + 10, seed + 11) * 0.0004;
               center = [poi.lat + latJitter, poi.lon + lonJitter];
             } else {
               // Scatter around centroid
-              const latJitter = (pseudoRandom(seed) - 0.5) * 0.04;
-              const lonJitter = (pseudoRandom(seed + 10) - 0.5) * 0.04;
+              // Gaussian normal distribution centered at the FSA centroid for organic density spread
+              const latJitter = gaussianRandom(seed, seed + 1) * 0.015;
+              const lonJitter = gaussianRandom(seed + 10, seed + 11) * 0.015;
               center = [row.centroid_lat + latJitter, row.centroid_lon + lonJitter];
             }
 
