@@ -298,8 +298,16 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
               <CircleMarker
                 key={`${row.fsa}-ev-${dotIdx}`}
                 center={center}
-                radius={2}
-                pathOptions={{ color: '#000', fillColor: '#000', fillOpacity: 0.8, weight: 1, pane: 'markerPane' }}
+                radius={3}
+                pathOptions={{ color: '#000', fillColor: '#fff', fillOpacity: 0.9, weight: 1.5, pane: 'markerPane' }}
+                eventHandlers={{
+                  mouseover: (e) => {
+                    e.target.setStyle({ fillColor: '#000' });
+                  },
+                  mouseout: (e) => {
+                    e.target.setStyle({ fillColor: '#fff' });
+                  }
+                }}
               />
             );
           });
@@ -429,7 +437,7 @@ export default function MapComponent({ gridData, evData, layer, prescriptions, s
         {showCars && layer === 'demand' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', borderTop: '1px solid #000', paddingTop: '6px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{ width: '6px', height: '6px', backgroundColor: '#000', borderRadius: '50%', border: '1px solid #000', margin: '0 5px' }} />
+              <div style={{ width: '6px', height: '6px', backgroundColor: '#fff', borderRadius: '50%', border: '1.5px solid #000', margin: '0 5px' }} />
               <span style={{ fontWeight: 'bold' }}>1 dot = 15 EV</span>
             </div>
           </div>

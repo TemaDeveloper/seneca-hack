@@ -1,16 +1,13 @@
 # EV Grid Planner Tasks
 
-## Add New POI Types & Hover Bugfix
-- [x] Fix the bug where hovering a zone (FSA polygon) hides the EV dots by rendering the dots on a higher Leaflet pane (`pane: 'markerPane'`).
-- [x] Update `data_preparation/fetch_pois.py` to fetch "Shopping Malls & Retail Centers", "Transit Hubs & Park-and-Ride", and "High-Density Residential" from Overpass API.
-- [x] Run `fetch_pois.py` to regenerate `gta_pois.json`.
-- [x] Add vector SVGs for new POI categories (`retail`, `transit`, `residential`) in `MapComponent.jsx`.
-- [x] Update filtering/rendering logic in `MapComponent.jsx` for the new POI categories.
-- [x] Update filter checkboxes and styling in `App.jsx` to let users toggle the new categories.
+## Style EV Dots (White Default, Black on Hover)
+- [x] Update EV dot `CircleMarker` styling in `MapComponent.jsx` to have a white fill with a black outline by default.
+- [x] Add `mouseover` and `mouseout` event handlers to the EV dot `CircleMarker` components to toggle their fill color to black on hover.
+- [x] Update the legend dot preview in `MapComponent.jsx` to show a white dot with a black border.
 - [x] Verify that the frontend builds and works correctly.
 
 ## Review
-- **Hover Bugfix**: The EV dots are now drawn on `pane: 'markerPane'` inside Leaflet, preventing the hovered FSA polygon overlay from drawing on top and hiding the dots.
-- **New POIs Added**: Successfully fetched and integrated three new categories of attraction points (Malls & Retail, Transit Hubs, and Residential Apartments).
-- **Validation**: Frontend successfully built with `npm run build` showing zero compilation errors.
-
+- **Default State**: EV dots are now styled as white circles with a solid black outline (radius: 3, weight: 1.5, fillOpacity: 0.9).
+- **Hover Interaction**: Added interactive mouse handlers that flip the fill color to solid black on hover.
+- **Legend Alignment**: The legend dot indicator has been updated to match the default white-filled styling.
+- **Verification**: The frontend builds successfully with no errors.
