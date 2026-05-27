@@ -1,10 +1,9 @@
 # EV Grid Planner Tasks
 
-## Move Legend to Top-Right
-- [x] Move the map legend container position from `bottom: '20px'` to `top: '20px'` in `MapComponent.jsx`.
-- [x] Verify that the frontend builds and works correctly.
+## Debug Collapsible Sidebar Button
+- [x] Remove `transform: translateX(-100%)` from `.sidebar.collapsed` in `index.css` to fix the double-shift that pushes the button off-screen.
+- [x] Verify that the toggle button remains visible at the left edge of the screen when collapsed.
 
 ## Review
-- **Legend Relocation**: Successfully shifted the map legend container from `bottom: '20px'` to `top: '20px'`.
-- **Button Auto-Docking**: The collapse toggle button docked to the left edge of the legend relocated automatically with it.
-- **Verification**: Verified compilation successfully with `npm run build`.
+- **Root Cause Fix**: Removed `transform: translateX(-100%)` from `.sidebar.collapsed` in `index.css` which was causing a double-translation alongside `margin-left: -372px`, throwing the absolutely positioned toggle button off-screen.
+- **Verification**: Verified that the frontend builds successfully.
