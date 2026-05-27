@@ -1,12 +1,12 @@
 # EV Grid Planner Tasks
 
-## Collapsible Map Legend Overlay
-- [x] Add `legendCollapsed` state to `MapComponent.jsx`.
-- [x] Add a sliding transform and CSS transition to the Map Legend container to allow it to slide off-screen to the right.
-- [x] Design and position a brutalist toggle button (`📜` / `✕`) docked to the left edge of the legend that remains visible when the legend is slid off.
+## Collapsible Sidebar Controls
+- [x] Add `sidebarCollapsed` state hook to `App.jsx`.
+- [x] Update `.sidebar` styles in `index.css` to support a `.collapsed` class (shifting it left by its total layout width of 372px) with transitions for smooth sliding.
+- [x] Add a brutalist toggle button (`◀` / `▶`) docked to the right edge of the sidebar in `App.jsx`.
 - [x] Verify that the frontend builds and works correctly.
 
 ## Review
-- **Collapsible Overlay**: Added transition & transform styles allowing the map legend to slide off-screen to the right smoothly.
-- **Brutalist Tab Toggle**: Docked a collapse button tab (`📜` / `✕`) on the left edge of the legend. It moves with the translation, remaining accessible at the screen boundary.
-- **Verification**: The code successfully builds with `npm run build` with no warnings/errors.
+- **Collapsible Sidebar**: Added transition & transform styles allowing the entire simulation control panel to slide off-screen to the left smoothly.
+- **Brutalist Floating Toggle Tab**: Positioned a tab-like toggle button absolutely at the right edge of the sidebar. When collapsed, it remains visible at the left screen boundary to easily toggle controls back.
+- **Verification**: The code successfully builds with `npm run build` showing zero compilation errors.

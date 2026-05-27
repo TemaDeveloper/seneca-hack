@@ -22,6 +22,7 @@ function App() {
   const [showCars, setShowCars] = useState(false);
   const [simVersion, setSimVersion] = useState(0);
   const [error, setError] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Attraction Points (POI) States
   const [showPois, setShowPois] = useState(false);
@@ -162,58 +163,89 @@ function App() {
         </div>
       )}
 
-      <div className="sidebar">
-        <h2>Simulation Controls</h2>
+      <div className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        {/* Brutalist Collapse Sidebar Button */}
+        <button
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          style={{
+            position: 'absolute',
+            right: '-44px',
+            top: '24px',
+            width: '40px',
+            height: '40px',
+            backgroundColor: '#fff',
+            border: '3px solid #000',
+            borderLeft: 'none',
+            boxShadow: sidebarCollapsed ? '4px 4px 0px #000' : 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            zIndex: 100,
+            transition: 'background-color 0.2s'
+          }}
+          title={sidebarCollapsed ? "Show Controls" : "Hide Controls"}
+          onMouseEnter={(e) => e.target.style.backgroundColor = '#f0f0f0'}
+          onMouseLeave={(e) => e.target.style.backgroundColor = '#fff'}
+        >
+          {sidebarCollapsed ? '▶' : '◀'}
+        </button>
 
-        <div className="input-group">
-          <label>Total EVs to Simulate</label>
-          <input
-            type="number" min="1000" max="100000" step="1000"
-            value={params.num_cars}
-            onChange={e => setParams({ ...params, num_cars: parseInt(e.target.value) || 0 })}
-          />
-        </div>
+        <div className={`sidebar-content ${sidebarCollapsed ? 'collapsed' : ''}`}>
+          <h2>Simulation Controls</h2>
 
-        <div className="input-group">
-          <label>Temperature ({params.temperature}°C)</label>
-          <input
-            type="range" min="-20" max="30" step="5"
-            value={params.temperature}
-            onChange={e => setParams({ ...params, temperature: parseInt(e.target.value) })}
-          />
-        </div>
+          <div className="input-group">
+            <label>Total EVs to Simulate</label>
+            <input
+              type="number" min="1000" max="100000" step="1000"
+              value={params.num_cars}
+              onChange={e => setParams({ ...params, num_cars: parseInt(e.target.value) || 0 })}
+            />
+          </div>
 
-        <div className="input-group">
-          <label>Time of Day ({params.time_of_day}:00)</label>
-          <input
-            type="range" min="0" max="23" step="1"
-            value={params.time_of_day}
-            onChange={e => setParams({ ...params, time_of_day: parseInt(e.target.value) })}
-          />
-        </div>
+          <div className="input-group">
+            <label>Temperature ({params.temperature}°C)</label>
+            <input
+              type="range" min="-20" max="30" step="5"
+              value={params.temperature}
+              onChange={e => setParams({ ...params, temperature: parseInt(e.target.value) })}
+            />
+          </div>
 
-        <div className="input-group">
-          <label>Max Charging Stations ({params.max_stations})</label>
-          <input
-            type="range" min="5" max="20" step="1"
-            value={params.max_stations}
-            onChange={e => setParams({ ...params, max_stations: parseInt(e.target.value) })}
-          />
-        </div>
+          <div className="input-group">
+            <label>Time of Day ({params.time_of_day}:00)</label>
+            <input
+              type="range" min="0" max="23" step="1"
+              value={params.time_of_day}
+              onChange={e => setParams({ ...params, time_of_day: parseInt(e.target.value) })}
+            />
+          </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
-          <button
-            onClick={handleRunSimulation}
-          >
-            Run Simulation
-          </button>
+          <div className="input-group">
+            <label>Max Charging Stations ({params.max_stations})</label>
+            <input
+              type="range" min="5" max="20" step="1"
+              value={params.max_stations}
+              onChange={e => setParams({ ...params, max_stations: parseInt(e.target.value) })}
+            />
+          </div>
 
-          <button
-            onClick={handleOptimize}
-            disabled={!simData}
-          >
-            Run Placement Optimization
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px' }}>
+            <button
+              onClick={handleRunSimulation}
+            >
+              Run Simulation
+            </button>
+
+            <button
+              onClick={handleOptimize}
+              disabled={!simData}
+            >
+              Run Placement Optimization
+            </button>
+          </div>
         </div>
       </div>
 

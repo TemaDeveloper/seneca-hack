@@ -34,6 +34,27 @@ body {
   flex-direction: column;
   gap: 24px;
   z-index: 10;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.sidebar.collapsed {
+  transform: translateX(-100%);
+  margin-left: -372px; /* 320px width + 48px padding + 4px border */
+}
+
+.sidebar-content {
+  opacity: 1;
+  transition: opacity 0.2s ease-in-out;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.sidebar-content.collapsed {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .main-content {
